@@ -1,0 +1,13 @@
+# Datos personales: NUNCA al repositorio
+seed.sql
+*.seed.sql
+backup*.json
+patrimonio-backup*.json
+.env
+.env.*
+
+# Basura habitual
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
