@@ -277,9 +277,9 @@
           const info = Calc.latestInfo(a, m.idx, today);
           const rows = m.idx.manual.get(a.id) || [];
           const prev = rows.length > 1 ? Number(rows[rows.length - 2].value) : null;
-          const d = prev != null && info.value != null ? info.value - prev : null;
+          const d = prev != null && info.total != null ? (info.total - prev) * info.share : null;
           return html`<li><button type="button" class="row" data-action="open-manual" data-id="${a.id}">
-            <span class="title"><span class="sw" style="background:var(--c-${a.category})"></span><span class="name">${a.name}</span></span>
+            <span class="title"><span class="sw" style="background:var(--c-${a.category})"></span><span class="name">${a.name}${info.share < 1 ? ' (' + Math.round(info.share * 100) + ' %)' : ''}</span></span>
             <span class="val num">${info.missingValue ? '—' : (c === 'deuda' ? '−' : '') + Calc.fmtEUR(info.value)}</span>
             <span class="sub">${info.missingValue ? html`<span class="flag">Sin valor todavía</span>` : info.stale ? html`<span class="flag">Sin actualizar desde el ${Calc.fmtDate(info.date)}</span>` : `Actualizado el ${Calc.fmtDate(info.date)}`}</span>
             <span class="val2 num">${d != null && Math.abs(d) >= 0.005 ? html`<span class="${(c === 'deuda' ? -d : d) >= 0 ? 'pos' : 'neg'}">${Calc.fmtSigned(d)}</span> desde el anterior` : ''}</span></button></li>`;
@@ -299,8 +299,9 @@
         <input id="um-date" name="date" type="date" value="${today}" required style="max-width:220px">
         <div style="margin-top:18px">${list.map((a) => {
           const info = Calc.latestInfo(a, m.idx, today);
-          const last = info.missingValue ? 'sin valor todavía' : `último: ${Calc.fmtEUR(info.value, 2)} (${Calc.fmtDate(info.date, false)})`;
-          return html`<div class="update-row"><label for="v-${a.id}">${a.name}<span class="hint">${Calc.CATEGORIES[a.category].label} · ${last}${a.category === 'deuda' ? ' · escribe la deuda pendiente en positivo' : ''}</span></label>
+          const last = info.missingValue ? 'sin valor todavía' : `último: ${Calc.fmtEUR(info.total, 2)} (${Calc.fmtDate(info.date, false)})`;
+          const shareNote = info.share < 1 ? ` · escribe el total de la cuenta; contará tu ${Math.round(info.share * 100)} %` : '';
+          return html`<div class="update-row"><label for="v-${a.id}">${a.name}<span class="hint">${Calc.CATEGORIES[a.category].label} · ${last}${a.category === 'deuda' ? ' · escribe la deuda pendiente en positivo' : ''}${shareNote}</span></label>
             <input id="v-${a.id}" name="v_${a.id}" inputmode="decimal" autocomplete="off" data-amount="2" placeholder="0,00"></div>`;
         })}</div>
         <div class="actions"><button class="btn" type="submit">Guardar</button></div>
@@ -407,7 +408,8 @@
     const today = Calc.todayStr(), info = Calc.latestInfo(a, m.idx, today);
     const rows = (m.idx.manual.get(id) || []).slice().reverse().slice(0, 12);
     showDialog(html`<div class="dlg">${dlgHeader(a.name, [Calc.CATEGORIES[a.category].label, a.entity].filter(Boolean).join(' · '))}
-      <dl class="facts"><div><dt>Valor actual</dt><dd class="num">${info.missingValue ? '—' : Calc.fmtEUR(info.value, 2)}</dd></div>
+      <dl class="facts"><div><dt>${info.share < 1 ? 'Tu parte (' + Math.round(info.share * 100) + ' %)' : 'Valor actual'}</dt><dd class="num">${info.missingValue ? '—' : Calc.fmtEUR(info.value, 2)}</dd></div>
+        ${info.share < 1 ? html`<div><dt>Total de la cuenta</dt><dd class="num">${info.missingValue ? '—' : Calc.fmtEUR(info.total, 2)}</dd></div>` : ''}
         <div><dt>Anotado el</dt><dd class="num">${info.date ? Calc.fmtDate(info.date) : '—'}</dd></div></dl>
       <div class="chart-wrap"><div id="dlg-chart" class="chart"></div></div>
       <h4>Anotar un valor</h4>
@@ -440,6 +442,8 @@
           <textarea id="ea-s" name="sources" spellcheck="false" placeholder='${EXAMPLE_SOURCES}'>${a && a.sources && a.sources.length ? JSON.stringify(a.sources, null, 1) : ''}</textarea>
           <p class="field-hint">Lista en formato JSON, de la preferida a la de reserva. Tipos: yahoo, ft, quefondos, finect, url_regex. Déjalo vacío si pondrás el precio a mano.</p>
         </div>
+        <label for="ea-p">Mi parte (%)</label><input id="ea-p" name="share" inputmode="decimal" value="${a ? String(Math.round((Number(a.share) > 0 ? Number(a.share) : 1) * 10000) / 100).replace('.', ',') : '100'}" style="max-width:140px">
+        <p class="field-hint">100 si es solo tuyo. Si compartes la cuenta o el inmueble, pon tu porcentaje (por ejemplo 50) y escribe siempre el total: la web aplicará tu parte.</p>
         <label for="ea-o">Orden en las listas</label><input id="ea-o" name="sort" inputmode="numeric" value="${a ? a.sort : 100}" style="max-width:140px">
         ${a ? '' : html`<div data-units-only${isUnits ? '' : raw(' hidden')}><div class="grid2">
             <div><label for="ea-u">Participaciones iniciales</label><input id="ea-u" name="units" inputmode="decimal" data-amount="4"></div>
@@ -471,7 +475,9 @@
       }
     }
     const sort = parseInt(fd.get('sort'), 10);
-    const row = { name, entity: (fd.get('entity') || '').trim() || null, category, valuation,
+    const pct = num(fd.get('share') || '100');
+    if (pct == null || !(pct > 0 && pct <= 100)) return toast('Tu parte debe estar entre 1 y 100 %.', true);
+    const row = { name, share: Math.round(pct * 100) / 10000, entity: (fd.get('entity') || '').trim() || null, category, valuation,
       isin: valuation === 'units' ? ((fd.get('isin') || '').trim().toUpperCase() || null) : null,
       sources, sort: Number.isFinite(sort) ? sort : 100 };
     await run(btn, async () => {
