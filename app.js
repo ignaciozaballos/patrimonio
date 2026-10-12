@@ -281,7 +281,7 @@
           return html`<li><button type="button" class="row" data-action="open-manual" data-id="${a.id}">
             <span class="title"><span class="sw" style="background:var(--c-${a.category})"></span><span class="name">${a.name}${info.share < 1 ? ' (' + Math.round(info.share * 100) + ' %)' : ''}</span></span>
             <span class="val num">${info.missingValue ? '—' : (c === 'deuda' ? '−' : '') + Calc.fmtEUR(info.value)}</span>
-            <span class="sub">${info.missingValue ? html`<span class="flag">Sin valor todavía</span>` : info.stale ? html`<span class="flag">Sin actualizar desde el ${Calc.fmtDate(info.date)}</span>` : `Actualizado el ${Calc.fmtDate(info.date)}`}</span>
+            <span class="sub">${info.missingValue ? html`<span class="flag">Sin valor todavía</span>` : info.stale ? html`<span class="flag">Sin actualizar desde el ${Calc.fmtDate(info.date)}</span>` : `Actualizado el ${Calc.fmtDate(info.date)}`}${a.loan ? ' · se calcula sola cada mes' : ''}</span>
             <span class="val2 num">${d != null && Math.abs(d) >= 0.005 ? html`<span class="${(c === 'deuda' ? -d : d) >= 0 ? 'pos' : 'neg'}">${Calc.fmtSigned(d)}</span> desde el anterior` : ''}</span></button></li>`;
         })}</ul>`;
       })}
@@ -301,7 +301,7 @@
           const info = Calc.latestInfo(a, m.idx, today);
           const last = info.missingValue ? 'sin valor todavía' : `último: ${Calc.fmtEUR(info.total, 2)} (${Calc.fmtDate(info.date, false)})`;
           const shareNote = info.share < 1 ? ` · escribe el total de la cuenta; contará tu ${Math.round(info.share * 100)} %` : '';
-          return html`<div class="update-row"><label for="v-${a.id}">${a.name}<span class="hint">${Calc.CATEGORIES[a.category].label} · ${last}${a.category === 'deuda' ? ' · escribe la deuda pendiente en positivo' : ''}${shareNote}</span></label>
+          return html`<div class="update-row"><label for="v-${a.id}">${a.name}<span class="hint">${Calc.CATEGORIES[a.category].label} · ${last}${a.category === 'deuda' ? ' · escribe la deuda pendiente en positivo' : ''}${shareNote}${a.loan ? ' · se calcula sola; anota aquí solo si quieres corregirla con el dato del banco' : ''}</span></label>
             <input id="v-${a.id}" name="v_${a.id}" inputmode="decimal" autocomplete="off" data-amount="2" placeholder="0,00"></div>`;
         })}</div>
         <div class="actions"><button class="btn" type="submit">Guardar</button></div>
@@ -442,6 +442,14 @@
           <textarea id="ea-s" name="sources" spellcheck="false" placeholder='${EXAMPLE_SOURCES}'>${a && a.sources && a.sources.length ? JSON.stringify(a.sources, null, 1) : ''}</textarea>
           <p class="field-hint">Lista en formato JSON, de la preferida a la de reserva. Tipos: yahoo, ft, quefondos, finect, url_regex. Déjalo vacío si pondrás el precio a mano.</p>
         </div>
+        <div data-loan-only${cat === 'deuda' ? '' : raw(' hidden')}>
+          <h4>Amortización automática (opcional)</h4>
+          <p class="field-hint">Si pagas una cuota fija cada mes, la web calcula sola cómo baja el capital pendiente, sin que lo anotes a mano. Anota una vez el capital pendiente que te da el banco (en Actualizar) y rellena esto. Cuando el banco te dé un dato nuevo, anótalo y se recalcula desde ahí. Déjalo vacío si no quieres automatizarla.</p>
+          <div class="grid2">
+            <div><label for="ea-lp">Cuota mensual (€)</label><input id="ea-lp" name="loan_payment" inputmode="decimal" data-amount="2" value="${a && a.loan && a.loan.payment != null ? Calc.fmtNum(Number(a.loan.payment), 2) : ''}"></div>
+            <div><label for="ea-lr">Tipo de interés anual (%)</label><input id="ea-lr" name="loan_rate" inputmode="decimal" value="${a && a.loan && a.loan.rate != null ? String(a.loan.rate).replace('.', ',') : ''}"></div></div>
+          <label for="ea-ld">Día del mes en que se cobra</label><input id="ea-ld" name="loan_day" inputmode="numeric" value="${a && a.loan && a.loan.day ? a.loan.day : ''}" style="max-width:140px">
+        </div>
         <label for="ea-p">Mi parte (%)</label><input id="ea-p" name="share" inputmode="decimal" value="${a ? String(Math.round((Number(a.share) > 0 ? Number(a.share) : 1) * 10000) / 100).replace('.', ',') : '100'}" style="max-width:140px">
         <p class="field-hint">100 si es solo tuyo. Si compartes la cuenta o el inmueble, pon tu porcentaje (por ejemplo 50) y escribe siempre el total: la web aplicará tu parte.</p>
         <label for="ea-o">Orden en las listas</label><input id="ea-o" name="sort" inputmode="numeric" value="${a ? a.sort : 100}" style="max-width:140px">
@@ -477,7 +485,15 @@
     const sort = parseInt(fd.get('sort'), 10);
     const pct = num(fd.get('share') || '100');
     if (pct == null || !(pct > 0 && pct <= 100)) return toast('Tu parte debe estar entre 1 y 100 %.', true);
-    const row = { name, share: Math.round(pct * 100) / 10000, entity: (fd.get('entity') || '').trim() || null, category, valuation,
+    let loan = null;
+    if (category === 'deuda' && ((fd.get('loan_payment') || '').trim() || (fd.get('loan_day') || '').trim())) {
+      const payment = num(fd.get('loan_payment')), rate = num(fd.get('loan_rate') || '0'), day = parseInt(fd.get('loan_day'), 10);
+      if (payment == null || !(payment > 0)) return toast('Escribe la cuota mensual del préstamo.', true);
+      if (rate == null || rate < 0 || rate > 30) return toast('El tipo de interés debe estar entre 0 y 30 %.', true);
+      if (!(day >= 1 && day <= 31)) return toast('El día de cobro debe estar entre 1 y 31.', true);
+      loan = { payment, rate, day };
+    }
+    const row = { name, share: Math.round(pct * 100) / 10000, loan, entity: (fd.get('entity') || '').trim() || null, category, valuation,
       isin: valuation === 'units' ? ((fd.get('isin') || '').trim().toUpperCase() || null) : null,
       sources, sort: Number.isFinite(sort) ? sort : 100 };
     await run(btn, async () => {
@@ -490,7 +506,7 @@
         }
         if (valuation === 'manual' && (fd.get('value') || '').trim()) {
           const v = num(fd.get('value')); if (v == null) throw new Error('Valor no válido.');
-          must(await state.sb.from('manual_values').insert({ asset_id: created.id, date: fd.get('value_date') || Calc.todayStr(), value: v }));
+          must(await state.sb.from('manual_values').insert({ asset_id: created.id, date: fd.get('value_date') || Calc.todayStr(), value: v, auto: false }));
         }
       }
       closeDialog();
@@ -529,7 +545,7 @@
       run(t, async () => {
         const today = Calc.todayStr();
         if (a.valuation === 'units') must(await state.sb.from('holdings').upsert({ asset_id: a.id, date: today, units: 0 }, { onConflict: 'asset_id,date' }));
-        else must(await state.sb.from('manual_values').upsert({ asset_id: a.id, date: today, value: 0 }, { onConflict: 'asset_id,date' }));
+        else must(await state.sb.from('manual_values').upsert({ asset_id: a.id, date: today, value: 0, auto: false }, { onConflict: 'asset_id,date' }));
         must(await state.sb.from('assets').update({ active: false }).eq('id', a.id));
         closeDialog(); await refresh();
       }, 'Producto dado de baja');
@@ -567,7 +583,7 @@
         if (!rawV) continue;
         const v = num(rawV);
         if (v == null) return toast(`«${a.name}»: no entiendo el importe «${rawV}».`, true);
-        rows.push({ asset_id: a.id, date, value: v });
+        rows.push({ asset_id: a.id, date, value: v, auto: false });
       }
       if (!rows.length) return toast('No has escrito ningún importe.', true);
       return run(btn, async () => {
@@ -598,7 +614,7 @@
       if (!validDate(date)) return toast('Elige una fecha.', true);
       if (value == null) return toast('Escribe un importe.', true);
       return run(btn, async () => {
-        must(await state.sb.from('manual_values').upsert({ asset_id: form.dataset.id, date, value }, { onConflict: 'asset_id,date' }));
+        must(await state.sb.from('manual_values').upsert({ asset_id: form.dataset.id, date, value, auto: false }, { onConflict: 'asset_id,date' }));
         await refresh();
       }, 'Valor guardado');
     },
@@ -628,6 +644,7 @@
       const isUnits = UNIT_CATS.includes(t.value), f = t.closest('form');
       f.querySelectorAll('[data-units-only]').forEach((x) => { x.hidden = !isUnits; });
       f.querySelectorAll('[data-manual-only]').forEach((x) => { x.hidden = isUnits; });
+      f.querySelectorAll('[data-loan-only]').forEach((x) => { x.hidden = t.value !== 'deuda'; });
     }
   });
 
