@@ -1,0 +1,68 @@
+name: Actualizar precios
+
+on:
+  schedule:
+    # Cada día a las 07:17 UTC (09:17 en Madrid en verano, 08:17 en invierno).
+    # Mensual:   "17 7 1 * *"   ·   Cada 15 días: "17 7 1,15 * *"   ·   Solo laborables: "17 7 * * 1-5"
+    # Mientras haya una ejecución al día, Supabase (plan gratuito) tampoco se pausa por inactividad.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: "Opcional · ISIN, código DGS o ticker separados por espacios. Prueba las fuentes SIN guardar nada"
+        required: false
+        default: ""
+      dry_run:
+        description: "Simulación: busca precios pero no guarda nada en Supabase"
+        type: boolean
+        default: false
+
+# contents: write solo sirve para el "latido" mensual del último paso.
+permissions:
+  contents: write
+
+concurrency:
+  group: update-prices
+  cancel-in-progress: false
+
+jobs:
+  prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Probar fuentes (solo si se ha pedido)
+        if: ${{ inputs.probe != '' }}
+        env:
+          PROBE: ${{ inputs.probe }}
+        run: |
+          read -ra ids <<< "$PROBE"
+          python scripts/update_prices.py probe "${ids[@]}"
+
+      - name: Actualizar precios en Supabase
+        if: ${{ inputs.probe == '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY" = "true" ]; then python scripts/update_prices.py --dry-run; else python scripts/update_prices.py; fi
+
+      # GitHub desactiva los flujos programados de repositorios públicos tras 60 días sin
+      # actividad. Si el último commit tiene más de 30 días, este paso añade uno vacío.
+      - name: Latido mensual
+        if: ${{ always() && github.event_name == 'schedule' }}
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( (now - last) / 86400 )) -ge 30 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: latido para mantener activo el flujo programado"
+            git push
+          fi
