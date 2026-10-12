@@ -97,14 +97,21 @@
   }
   const last = (rows) => (rows && rows.length ? rows[rows.length - 1] : null);
 
+  /** Parte propia del producto (1 = 100 %; 0,5 = cuenta al 50 % con otra persona). */
+  const shareOf = (asset) => {
+    const s = Number(asset && asset.share);
+    return s > 0 && s <= 1 ? s : 1;
+  };
+
   function valueAt(asset, idx, date) {
+    const sh = shareOf(asset);
     if (asset.valuation === 'units') {
       const h = at(idx.holdings.get(asset.id), date);
       const p = at(idx.prices.get(asset.id), date);
-      return h && p ? Number(h.units) * Number(p.price) : null;
+      return h && p ? Number(h.units) * Number(p.price) * sh : null;
     }
     const m = at(idx.manual.get(asset.id), date);
-    return m ? Number(m.value) : null;
+    return m ? Number(m.value) * sh : null;
   }
 
   function thinDates(dates, today) {
@@ -164,13 +171,14 @@
         units: h ? Number(h.units) : null,
         price: p ? Number(p.price) : null,
         priceDate: refDate, observed: p ? p.date : null, source: p ? p.source : null,
-        value: h && p ? Number(h.units) * Number(p.price) : null,
+        value: h && p ? Number(h.units) * Number(p.price) * shareOf(asset) : null,
         age, stale: age != null && age > limit, missingPrice: !p, missingUnits: !h,
       };
     }
     const m = last(idx.manual.get(asset.id));
     const age = m ? daysBetween(m.date, today) : null;
-    return { value: m ? Number(m.value) : null, date: m ? m.date : null, age,
+    const sh = shareOf(asset);
+    return { value: m ? Number(m.value) * sh : null, total: m ? Number(m.value) : null, share: sh, date: m ? m.date : null, age,
              stale: m ? age > limit : false, missingValue: !m };
   }
 
@@ -220,6 +228,6 @@
     CATEGORIES, LIST_ORDER, STACK_ORDER, STALE_DAYS,
     toTs, fromTs, daysBetween, addDays, todayStr,
     fmtEUR, fmtSigned, fmtNum, fmtPct, fmtCompactEUR, fmtDate, parseAmount,
-    groupBy, at, last, valueAt, thinDates, buildModel, latestInfo, change, priceChange, alerts,
+    groupBy, at, last, shareOf, valueAt, thinDates, buildModel, latestInfo, change, priceChange, alerts,
   };
 });
