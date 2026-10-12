@@ -272,7 +272,8 @@ def src_quefondos(cfg: dict) -> Quote:
 
 
 def parse_finect(text: str) -> Quote:
-    m = re.search(r"(\d[\d.]*,\d+)\s*Fecha de valor liquidativo:?\s*", text)
+    m = (re.search(r"(\d[\d.]*,\d+)\s*Fecha de valor liquidativo:?\s*", text)
+         or re.search(r"(\d[\d.]*,\d+)\s*€[^\d]{0,120}?Fecha de valor liquidativo:?\s*", text))
     if not m:
         raise SourceError("finect: no encuentro el valor liquidativo")
     price = _check_price(parse_number(m.group(1), ","), "finect")
@@ -483,6 +484,8 @@ def classify(ident: str) -> str:
         return "isin"
     if re.fullmatch(r"[NFPJ]\d{4}", ident):
         return "dgs"
+    if re.fullmatch(r"[NFPJ]\d{4}-[\w.-]+", ident):
+        return "finect_slug"
     return "ticker"
 
 
@@ -491,6 +494,8 @@ def candidate_sources(ident: str) -> list[dict]:
     if kind == "isin":
         return [{"type": "yahoo", "isin": ident}, {"type": "ft", "id": f"{ident}:EUR"},
                 {"type": "finect", "isin": ident}, {"type": "quefondos", "kind": "fondos", "id": ident}]
+    if kind == "finect_slug":  # p. ej. N5568-Indexa_empleo_autonomos_100_accs_ppes (final de la URL de Finect)
+        return [{"type": "finect", "kind": "planes-pensiones", "id": ident}]
     if kind == "dgs":
         return [{"type": "quefondos", "kind": "planes", "id": ident},
                 {"type": "finect", "kind": "planes-pensiones", "id": ident}]
