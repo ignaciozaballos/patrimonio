@@ -227,6 +227,34 @@ def src_ft(cfg: dict) -> Quote:
     return parse_ft(html_to_text(http_get(url)))
 
 
+def parse_ft_equity(text: str) -> Quote:
+    q = parse_ft(text)
+    q.source = "ft_equity"
+    return q
+
+
+def src_ft_equity(cfg: dict) -> Quote:
+    url = "https://markets.ft.com/data/equities/tearsheet/summary?s=" + urllib.parse.quote(cfg["id"])
+    return parse_ft_equity(html_to_text(http_get(url)))
+
+
+def parse_stooq(text: str) -> Quote:
+    """CSV de https://stooq.com/q/l/?s=abvx.fr&f=sd2t2c&h&e=csv  ->  Symbol,Date,Time,Close"""
+    rows = [r.strip() for r in text.strip().splitlines() if r.strip()]
+    if len(rows) < 2:
+        raise SourceError("stooq: respuesta vacía")
+    cols = [c.strip() for c in rows[1].split(",")]
+    if len(cols) < 4 or "N/D" in cols[1:4]:
+        raise SourceError("stooq: sin datos para ese símbolo")
+    price = _check_price(parse_number(cols[3], "."), "stooq")
+    return Quote(price, parse_date(cols[1]), "stooq")
+
+
+def src_stooq(cfg: dict) -> Quote:
+    url = "https://stooq.com/q/l/?s=" + urllib.parse.quote(cfg["symbol"].lower()) + "&f=sd2t2c&h&e=csv"
+    return parse_stooq(http_get(url))
+
+
 def parse_quefondos(text: str) -> Quote:
     m = re.search(r"Valor liquidativo:\s*([\d.]+,\d+|\d+\.\d+|\d+)\s*EUR", text, re.I)
     if not m:
@@ -282,6 +310,8 @@ SOURCES = {
     "ft": src_ft,
     "quefondos": src_quefondos,
     "finect": src_finect,
+    "ft_equity": src_ft_equity,
+    "stooq": src_stooq,
     "url_regex": src_url_regex,
 }
 
@@ -464,7 +494,14 @@ def candidate_sources(ident: str) -> list[dict]:
     if kind == "dgs":
         return [{"type": "quefondos", "kind": "planes", "id": ident},
                 {"type": "finect", "kind": "planes-pensiones", "id": ident}]
-    return [{"type": "yahoo", "symbol": ident}]
+    out = [{"type": "yahoo", "symbol": ident}]
+    base, _, suffix = ident.partition(".")
+    stooq = {"PA": "fr", "MC": "es", "DE": "de", "L": "uk", "MI": "it", "AS": "nl"}
+    ft = {"PA": "PAR", "MC": "MCE", "DE": "GER", "L": "LSE", "MI": "MIL", "AS": "AEX"}
+    if suffix in stooq:
+        out.append({"type": "stooq", "symbol": f"{base}.{stooq[suffix]}"})
+        out.append({"type": "ft_equity", "id": f"{base}:{ft[suffix]}"})
+    return out
 
 
 def probe(idents: list[str], fetch=fetch_quote) -> tuple[str, str]:
