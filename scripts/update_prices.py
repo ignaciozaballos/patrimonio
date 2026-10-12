@@ -382,6 +382,24 @@ class SupabaseDb:
             "GET",
             "/assets?select=id,user_id,name,category,valuation,sources&active=eq.true&order=sort,name")
 
+    def get_loans(self) -> list[dict]:
+        return self._request("GET", "/assets?select=id,user_id,name,loan&active=eq.true&loan=not.is.null&order=sort,name")
+
+    def loan_anchor(self, asset_id: str) -> dict | None:
+        """Último valor anotado a mano (no calculado): el punto de partida de la amortización."""
+        rows = self._request(
+            "GET", f"/manual_values?select=date,value&asset_id=eq.{asset_id}&auto=eq.false&order=date.desc&limit=1")
+        return rows[0] if rows else None
+
+    def delete_auto_after(self, asset_id: str, d: str) -> None:
+        self._request("DELETE", f"/manual_values?asset_id=eq.{asset_id}&auto=eq.true&date=gt.{d}",
+                      None, {"Prefer": "return=minimal"})
+
+    def upsert_manual(self, rows: list[dict]) -> None:
+        if rows:
+            self._request("POST", "/manual_values?on_conflict=asset_id,date", rows,
+                          {"Prefer": "resolution=merge-duplicates,return=minimal"})
+
     def last_price(self, asset_id: str) -> dict | None:
         rows = self._request(
             "GET",
@@ -462,6 +480,69 @@ def run_update(db, today: date, dry_run: bool = False, fetch=fetch_quote) -> lis
                 "price": q.price, "source": q.source,
             })
         results.append(Result(name, "OK" if not note else "AVISO", q.price, q.nav_date, q.source, note))
+    return results
+
+
+def _payment_date(year: int, month: int, day: int) -> date:
+    """Día de cobro de ese mes; si el mes no tiene ese día (30 de febrero) se usa el último."""
+    nxt = date(year + (month == 12), month % 12 + 1, 1)
+    return date(year, month, min(day, (nxt - timedelta(days=1)).day))
+
+
+def loan_schedule(balance: float, annual_rate_pct: float, payment: float, day: int,
+                  anchor: date, today: date) -> list[tuple[date, float]]:
+    """Capital pendiente tras cada cuota cobrada después de `anchor` y hasta `today` (amortización
+    francesa: intereses del mes = pendiente × tipo / 12; el resto de la cuota amortiza capital)."""
+    if not (1 <= day <= 31):
+        raise ValueError("el día de cobro debe estar entre 1 y 31")
+    if payment <= 0 or annual_rate_pct < 0:
+        raise ValueError("cuota o tipo no válidos")
+    out: list[tuple[date, float]] = []
+    y, m = anchor.year, anchor.month
+    d = _payment_date(y, m, day)
+    if d <= anchor:
+        y, m = y + (m == 12), m % 12 + 1
+        d = _payment_date(y, m, day)
+    bal = round(balance, 2)
+    while d <= today and bal > 0:
+        interest = bal * annual_rate_pct / 100 / 12
+        if payment <= interest:
+            raise ValueError(f"la cuota ({payment:g}) no cubre los intereses del mes ({interest:.2f})")
+        bal = max(0.0, round(bal - (payment - interest), 2))
+        out.append((d, bal))
+        y, m = y + (m == 12), m % 12 + 1
+        d = _payment_date(y, m, day)
+    return out
+
+
+def run_loans(db, today: date, dry_run: bool = False) -> list[Result]:
+    """Genera los valores mensuales de los préstamos con cuota fija a partir del último valor anotado a mano."""
+    results: list[Result] = []
+    for a in db.get_loans():
+        name, cfg = a["name"], a.get("loan") or {}
+        try:
+            payment, rate, day = float(cfg["payment"]), float(cfg.get("rate", 0)), int(cfg["day"])
+        except (KeyError, TypeError, ValueError):
+            results.append(Result(name, "HIPOTECA", note="faltan cuota o día de cobro en los datos del préstamo",
+                                  failure=True))
+            continue
+        anchor = db.loan_anchor(a["id"])
+        if not anchor:
+            results.append(Result(name, "HIPOTECA", note="anota primero en la web el capital pendiente de hoy"))
+            continue
+        a0 = date.fromisoformat(anchor["date"])
+        try:
+            steps = loan_schedule(float(anchor["value"]), rate, payment, day, a0, today)
+        except ValueError as e:
+            results.append(Result(name, "HIPOTECA", note=str(e), failure=True))
+            continue
+        if not dry_run:
+            db.delete_auto_after(a["id"], a0.isoformat())
+            db.upsert_manual([{"user_id": a["user_id"], "asset_id": a["id"], "date": d.isoformat(),
+                               "value": v, "auto": True} for d, v in steps])
+        last = steps[-1][1] if steps else float(anchor["value"])
+        results.append(Result(name, "HIPOTECA", last, steps[-1][0] if steps else a0, "amortización",
+                              f"{len(steps)} cuota(s) calculadas desde el valor del {a0.isoformat()}"))
     return results
 
 
@@ -552,7 +633,12 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     today = datetime.now(MADRID).date()
-    results = run_update(SupabaseDb(url, key), today, args.dry_run)
+    db = SupabaseDb(url, key)
+    results = run_update(db, today, args.dry_run)
+    try:
+        results += run_loans(db, today, args.dry_run)
+    except Exception as e:  # p. ej. si aún no se ha añadido la columna 'loan' en Supabase
+        results.append(Result("Préstamos", "ERROR", note=str(e)[:300], failure=True))
     text, md = render(results, today, args.dry_run)
     print(text)
     write_summary(md)
