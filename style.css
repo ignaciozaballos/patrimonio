@@ -439,3 +439,9 @@ table.heat td.hm:not(.none):hover { outline: 2px solid var(--accent); outline-of
 .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 #inv-table-wrap .stat-row { padding-bottom: 12px; }
 #inv-table-wrap .chart-empty { padding: 0 18px 12px; }
+
+.notes-filter { padding: 4px 18px 2px; }
+.notes li { display: flex; align-items: flex-start; gap: 10px; }
+.note-check { display: inline-flex; padding-top: 1px; cursor: pointer; }
+.note-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.notes-empty { padding: 8px 18px 16px; margin: 0; }
