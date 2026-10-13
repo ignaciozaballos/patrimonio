@@ -78,9 +78,10 @@
     });
     const tops = cum.length ? cum[cum.length - 1].upper : [];
     const allUpper = tops.filter((v) => v != null);
-    let ymin = 0, ymax = Math.max(...allUpper, 1);
+    const extra = (spec.lines || []).flatMap((l) => l.values.filter((v) => v != null));
+    let ymin = 0, ymax = Math.max(...allUpper, ...extra, 1);
     if (spec.yMode === 'fit') {
-      const vals = spec.series[0].values.filter((v) => v != null);
+      const vals = spec.series[0].values.filter((v) => v != null).concat(extra);
       const lo = Math.min(...vals), hi = Math.max(...vals);
       const pad = (hi - lo) * 0.15 || Math.abs(hi) * 0.05 || 1;
       ymin = Math.max(0, lo - pad); ymax = hi + pad;
@@ -112,6 +113,17 @@
         const line = el('path', { d: dl, class: 'topline' }, layers);
         line.style.stroke = s.color;
       }
+    });
+
+    // líneas de referencia (p. ej. capital aportado)
+    (spec.lines || []).forEach((l) => {
+      let d = '', started = false;
+      for (let i = 0; i < n; i++) {
+        if (l.values[i] == null) continue;
+        d += (started ? 'L' : 'M') + xs[i].toFixed(1) + ' ' + y(l.values[i]).toFixed(1); started = true;
+      }
+      const p = el('path', { d, class: 'refline' + (l.dashed === false ? '' : ' dashed') }, svg);
+      p.style.stroke = l.color || 'var(--muted)';
     });
 
     // etiquetas del eje Y (con halo para leerlas sobre las capas)
@@ -158,14 +170,19 @@
         (spec.extraRows ? spec.extraRows(best) : []).forEach((x) => rows.push(x));
         if (spec.showTotal) rows.push({ label: spec.totalLabel || 'Total', value: spec.totalValues ? spec.totalValues[best] : tops[best], total: true });
       } else {
-        rows.push({ label: spec.series[0].label, value: spec.series[0].values[best], color: spec.series[0].color, total: true });
+        rows.push({ label: spec.series[0].label, value: spec.series[0].values[best], color: spec.series[0].color, total: !(spec.lines || []).length });
+      }
+      (spec.lines || []).forEach((l) => { if (l.values[best] != null) rows.push({ label: l.label, value: l.values[best], color: l.color || 'var(--muted)' }); });
+      if (spec.diffRow && spec.lines && spec.lines[0] && spec.lines[0].values[best] != null) {
+        const dv = spec.series[0].values[best] - spec.lines[0].values[best];
+        rows.push({ label: spec.diffRow, value: dv, total: true, signed: true });
       }
       rows.forEach((row) => {
         const line = document.createElement('div');
         line.className = 'tip-row' + (row.total ? ' tip-total' : '');
         if (row.color) { const sw = document.createElement('i'); sw.style.background = row.color; line.appendChild(sw); }
         const a = document.createElement('span'); a.textContent = row.label;
-        const b = document.createElement('b'); b.textContent = (spec.fmt || String)(row.value);
+        const b = document.createElement('b'); b.textContent = row.signed && spec.fmtSigned ? spec.fmtSigned(row.value) : (spec.fmt || String)(row.value);
         line.appendChild(a); line.appendChild(b); tip.appendChild(line);
       });
       tip.hidden = false;
@@ -181,5 +198,52 @@
     svg.addEventListener('pointercancel', hide);
   }
 
-  root.Charts = { draw, destroy, niceTicks };
+  /** Rosco: items = [{label, value, color}]. Devuelve el SVG (el texto del centro se pone con HTML). */
+  function donut(host, items, opts) {
+    host.textContent = '';
+    const total = items.reduce((s, x) => s + x.value, 0);
+    const S = 220, R = 92, r = 62, cx = S / 2, cy = S / 2;
+    const svg = el('svg', { viewBox: `0 0 ${S} ${S}`, role: 'img', 'aria-label': (opts && opts.ariaLabel) || 'Reparto', class: 'donut-svg' }, host);
+    if (!(total > 0)) return;
+    let a0 = -Math.PI / 2;
+    items.forEach((it, k) => {
+      const frac = it.value / total, a1 = a0 + frac * Math.PI * 2 - (items.length > 1 ? 0.012 : 0);
+      if (frac <= 0) return;
+      const big = a1 - a0 > Math.PI ? 1 : 0;
+      const p = (rad, a) => [(cx + rad * Math.cos(a)).toFixed(2), (cy + rad * Math.sin(a)).toFixed(2)];
+      const [x0, y0] = p(R, a0), [x1, y1] = p(R, a1), [x2, y2] = p(r, a1), [x3, y3] = p(r, a0);
+      const path = el('path', { d: `M${x0} ${y0}A${R} ${R} 0 ${big} 1 ${x1} ${y1}L${x2} ${y2}A${r} ${r} 0 ${big} 0 ${x3} ${y3}Z`, class: 'slice', 'data-i': k }, svg);
+      path.style.fill = it.color;
+      const t = el('title', {}, path); t.textContent = `${it.label}: ${(opts && opts.fmt ? opts.fmt(it.value) : it.value)} (${Math.round(frac * 100)} %)`;
+      a0 += frac * Math.PI * 2;
+    });
+  }
+
+  /** Barras verticales con valores +/-: items = [{label, value}]. */
+  function bars(host, items, opts) {
+    host.textContent = '';
+    const Calc = C(), n = items.length;
+    if (!n) return;
+    const W = Math.max(280, Math.round(host.clientWidth || 600)), H = 190, padT = 12, padB = 26;
+    const maxAbs = Math.max(...items.map((x) => Math.abs(x.value)), 1);
+    const hasNeg = items.some((x) => x.value < 0);
+    const zero = hasNeg ? padT + (H - padT - padB) * 0.5 : H - padB;
+    const scale = (hasNeg ? (H - padT - padB) / 2 : (H - padT - padB)) / (maxAbs * 1.1);
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': (opts && opts.ariaLabel) || 'Barras', class: 'chart-svg' }, host);
+    el('line', { x1: 0, x2: W, y1: zero, y2: zero, class: 'grid' }, svg);
+    const slot = W / n, bw = Math.min(46, slot * 0.62);
+    items.forEach((it, k) => {
+      const h = Math.abs(it.value) * scale, x = k * slot + (slot - bw) / 2;
+      const rect = el('rect', { x: x.toFixed(1), width: bw.toFixed(1), y: (it.value >= 0 ? zero - h : zero).toFixed(1), height: Math.max(1, h).toFixed(1), rx: 4, class: 'bar ' + (it.value >= 0 ? 'up' : 'down') }, svg);
+      const t = el('title', {}, rect); t.textContent = `${it.label}: ${opts && opts.fmtSigned ? opts.fmtSigned(it.value) : it.value}`;
+      const lx = el('text', { x: (x + bw / 2).toFixed(1), y: H - 8, class: 'xlabel', 'text-anchor': 'middle' }, svg); lx.textContent = it.label;
+      if (n <= 8) {
+        const vy = it.value >= 0 ? zero - h - 4 : zero + h + 11;
+        const vt = el('text', { x: (x + bw / 2).toFixed(1), y: vy.toFixed(1), class: 'barval', 'text-anchor': 'middle' }, svg);
+        vt.textContent = Calc.fmtCompactEUR(it.value);
+      }
+    });
+  }
+
+  root.Charts = { draw, destroy, niceTicks, donut, bars };
 })(typeof self !== 'undefined' ? self : this);
