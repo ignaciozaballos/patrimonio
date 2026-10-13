@@ -62,8 +62,8 @@
     if (n < 2) return;
 
     const W = Math.max(280, Math.round(host.clientWidth || 600));
-    const H = W < 520 ? 230 : 290;
-    const padT = 8, padB = 24, padL = 0, padR = 0;
+    const H = W < 520 ? 240 : (spec.tall ? 360 : 290);
+    const padT = 10, padB = 26, padL = W < 520 ? 44 : 54, padR = 8;
     const t0 = Calc.toTs(spec.dates[0]), t1 = Calc.toTs(spec.dates[n - 1]);
     const xs = spec.dates.map((d) => padL + ((Calc.toTs(d) - t0) / (t1 - t0 || 1)) * (W - padL - padR));
 
@@ -93,9 +93,10 @@
     svg.classList.add('chart-svg');
 
     // rejilla (detrás de las capas)
-    const ticks = niceTicks(ymin, ymax, W < 520 ? 3 : 4).filter((v) => v > ymin || spec.yMode !== 'zero');
+    const ticks = niceTicks(ymin, ymax, W < 520 ? 4 : 5).filter((v) => v >= ymin && v <= ymax);
     const grid = el('g', {}, svg);
-    ticks.forEach((v) => el('line', { x1: 0, x2: W, y1: y(v), y2: y(v), class: 'grid' }, grid));
+    ticks.forEach((v) => el('line', { x1: padL, x2: W - padR, y1: y(v), y2: y(v), class: 'grid' }, grid));
+    el('line', { x1: padL, x2: W - padR, y1: H - padB, y2: H - padB, class: 'axis' }, grid);
 
     // capas
     const layers = el('g', { class: 'layers' }, svg);
@@ -126,21 +127,25 @@
       p.style.stroke = l.color || 'var(--muted)';
     });
 
-    // etiquetas del eje Y (con halo para leerlas sobre las capas)
+    // eje Y (valores a la izquierda)
     ticks.forEach((v) => {
-      const t = el('text', { x: 10, y: y(v) - 4, class: 'ylabel' }, svg);
+      const t = el('text', { x: padL - 7, y: y(v) + 4, class: 'ylabel', 'text-anchor': 'end' }, svg);
       t.textContent = Calc.fmtCompactEUR(v);
     });
-    // etiquetas del eje X
-    const longSpan = (t1 - t0) / 86400000 > 330;
-    const xt = [0, 1 / 3, 2 / 3, 1].map((f) => t0 + f * (t1 - t0));
-    xt.forEach((t, k) => {
+    // eje X (fechas repartidas por el periodo)
+    const spanDays = (t1 - t0) / 86400000, longSpan = spanDays > 330;
+    const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    const nx = W < 520 ? 4 : W < 800 ? 6 : 8;
+    for (let k = 0; k < nx; k++) {
+      const f = k / (nx - 1), t = t0 + f * (t1 - t0);
       const d = Calc.fromTs(Math.round(t / 86400000) * 86400000);
-      const fx = (t - t0) / (t1 - t0 || 1);
-      const tx = el('text', { x: Math.min(W - 10, Math.max(10, padL + fx * (W - padL - padR))), y: H - 7,
-        class: 'xlabel', 'text-anchor': k === 0 ? 'start' : k === xt.length - 1 ? 'end' : 'middle' }, svg);
-      tx.textContent = Calc.fmtDate(d, longSpan);
-    });
+      const label = spanDays > 200 ? MES[Number(d.slice(5, 7)) - 1] + ' ' + d.slice(2, 4) : Calc.fmtDate(d, false);
+      const x = padL + f * (W - padL - padR);
+      el('line', { x1: x, x2: x, y1: H - padB, y2: H - padB + 4, class: 'axis' }, svg);
+      const tx = el('text', { x, y: H - 7, class: 'xlabel', 'text-anchor': k === 0 ? 'start' : k === nx - 1 ? 'end' : 'middle' }, svg);
+      tx.textContent = label;
+    }
+    void longSpan;
 
     // lectura al pasar el ratón / dedo
     const cursor = el('line', { class: 'cursor', y1: padT, y2: H - padB, x1: 0, x2: 0, visibility: 'hidden' }, svg);
