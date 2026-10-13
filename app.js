@@ -31,7 +31,7 @@
   const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', rng: { main: { k: '1a' }, month: { k: '1a' }, inv: { k: '1a' } }, revealed: false, dlg: null,
     hide: store.get('hide') === '1', hiddenCats: new Set(), notesOpen: store.get('notes') !== '0', donut: 'cat', invSort: { key: 'value', dir: -1 },
     goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 },
-    heat: store.get('heat') === 'pct' ? 'pct' : 'eur', cmp: null };
+    heat: store.get('heat') === 'pct' ? 'pct' : 'eur', cmp: null, invFilter: '' };
 
   // ---------- avisos ----------
   let toastTimer;
@@ -406,15 +406,66 @@
 
   // ---------- inversiones ----------
   const INV_COLS = [['name', 'Producto', false], ['value', 'Valor', true], ['weight', 'Peso', true], ['invested', 'Aportado', true], ['gain', 'Beneficio', true], ['pct', 'Rentab.', true], ['annual', 'Anualizada', true], ['m30', '30 días', true]];
+  // ---------- filtro de la tabla de inversiones ----------
+  const norm = (t) => String(t == null ? '' : t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const stem = (w) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w);
+  const entityOf = (a) => (a.entity && String(a.entity).trim()) || 'Sin entidad';
+  function invMatches(asset, q) {
+    const toks = norm(q).split(/\s+/).filter(Boolean).map(stem);
+    if (!toks.length) return true;
+    const hay = norm([entityOf(asset), asset.name, Calc.CATEGORIES[asset.category].label].join(' '));
+    return toks.every((t) => hay.includes(t));
+  }
+  function invEntities(ret) {
+    const m = new Map();
+    for (const r of ret.rows) { const k = entityOf(r.asset); m.set(k, (m.get(k) || 0) + r.value); }
+    return [...m].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }
+  function invChips(ret) {
+    const cur = norm(state.invFilter).trim();
+    return html`<button type="button" class="chip" data-action="inv-entity" data-entity="" aria-pressed="${cur === ''}">Todas</button>${invEntities(ret).map((e) =>
+      html`<button type="button" class="chip" data-action="inv-entity" data-entity="${e.name}" aria-pressed="${norm(e.name) === cur}">${e.name}</button>`)}`;
+  }
+  /** Tabla de productos filtrada, con resumen de lo que se ve. */
+  function invTable() {
+    const m = state.model, today = Calc.todayStr();
+    const all = A.returns(m, today);
+    const q = state.invFilter.trim();
+    const shown = all.rows.filter((r) => invMatches(r.asset, q));
+    const value = shown.reduce((s, r) => s + r.value, 0), invested = shown.reduce((s, r) => s + r.invested, 0), gain = value - invested;
+    const pct = invested > 0.5 ? value / invested - 1 : null;
+    const fl = shown.flatMap((r) => r.flows).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const days = fl.length ? Calc.daysBetween(fl[0].date, today) : 0;
+    const annual = days >= A.MIN_ANNUAL_DAYS ? A.xirr(fl, value, today) : null;
+    const total = value || 1;
+    const rows = shown.map((r) => ({ r, name: r.asset.name, value: r.value, weight: r.value / total, invested: r.invested, gain: r.gain, pct: r.pct, annual: r.annual, m30: Calc.priceChange(r.asset, m.idx, 30) }));
+    const { key, dir } = state.invSort;
+    rows.sort((a, b) => key === 'name' ? dir * a.name.localeCompare(b.name, 'es') : dir * ((a[key] == null ? -Infinity : a[key]) - (b[key] == null ? -Infinity : b[key])));
+    const sgn = (v) => (v >= 0 ? 'pos' : 'neg');
+    const box = (title, big, small, cls) => html`<div class="stat"><div class="kl">${title}</div><div class="sv num ${cls || ''}">${big}</div><div class="kd">${small}</div></div>`;
+    const summary = q ? (shown.length ? html`<div class="stat-row four">
+        ${box('Valor', Calc.fmtEUR(value), `${shown.length} de ${all.rows.length} productos · ${pctPlain.format(value / (all.value || 1))} de tus inversiones`)}
+        ${box('Aportado', Calc.fmtEUR(invested), 'Compras a precio del día')}
+        ${box('Beneficio', Calc.fmtSigned(gain), pct != null ? Calc.fmtPct(pct) : '', sgn(gain))}
+        ${box('Rentabilidad anualizada', annual == null ? '—' : Calc.fmtPct(annual), annual == null ? 'Hacen falta 6 meses de inversión' : 'Al año, según cuándo aportaste', annual == null ? '' : sgn(annual))}
+      </div>` : html`<p class="chart-empty">Ningún producto coincide con «${q}».</p>`) : '';
+    if (!shown.length) return summary;
+    return html`${summary}<div class="table-scroll"><table><thead><tr>${INV_COLS.map(([k, l, r]) => html`<th class="${r ? 'r ' : ''}sortable" data-action="sort-inv" data-key="${k}" role="button" tabindex="0" style="cursor:pointer">${l}${key === k ? (dir > 0 ? ' ▲' : ' ▼') : ''}</th>`)}<th>Precio</th></tr></thead>
+        <tbody>${rows.map((x) => html`<tr class="click" data-action="open-asset" data-id="${x.r.asset.id}">
+          <td><span class="name-cell"><span class="sw" style="background:var(--c-${x.r.asset.category})"></span><span>${x.r.asset.name}<span class="sub">${[x.r.asset.entity, Calc.CATEGORIES[x.r.asset.category].label].filter(Boolean).join(' · ')}${x.r.asset.plan ? ' · aporta ' + Calc.fmtEUR(Number(x.r.asset.plan.amount)) + '/mes' : ''}</span></span></span></td>
+          <td class="r num">${Calc.fmtEUR(x.value)}</td><td class="r num">${pctPlain.format(x.weight)}</td><td class="r num">${Calc.fmtEUR(x.invested)}</td>
+          <td class="r num ${changeClass(x.gain)}">${Calc.fmtSigned(x.gain)}</td><td class="r num ${x.pct == null ? '' : changeClass(x.pct)}">${x.pct == null ? '—' : Calc.fmtPct(x.pct)}</td>
+          <td class="r num ${x.annual == null ? '' : changeClass(x.annual)}" title="${x.annual == null ? 'Con menos de 6 meses no se anualiza' : 'Rentabilidad anual equivalente'}">${x.annual == null ? '—' : Calc.fmtPct(x.annual)}</td>
+          <td class="r num ${x.m30 == null ? '' : changeClass(x.m30)}">${x.m30 == null ? '—' : Calc.fmtPct(x.m30)}</td>
+          <td>${x.r.info.stale ? html`<span class="pill warn">del ${Calc.fmtDate(x.r.info.priceDate, false)}</span>` : html`<span class="pill on">al día</span>`}</td></tr>`)}</tbody>
+        <tfoot><tr><td>${q ? 'Total de la selección' : 'Total'}</td><td class="r num">${Calc.fmtEUR(value)}</td><td class="r num">100 %</td><td class="r num">${Calc.fmtEUR(invested)}</td><td class="r num ${changeClass(gain)}">${Calc.fmtSigned(gain)}</td><td class="r num">${pct != null ? Calc.fmtPct(pct) : '—'}</td><td class="r num ${annual == null ? '' : changeClass(annual)}">${annual == null ? '—' : Calc.fmtPct(annual)}</td><td></td><td></td></tr></tfoot></table></div>`;
+  }
+
   function renderInversiones() {
     const m = state.model, today = Calc.todayStr();
     const list = m.assets.filter((a) => a.active && a.valuation === 'units');
     if (!list.length) return emptyState('No hay fondos, acciones ni planes', 'Añádelos en Ajustes con su ISIN y sus participaciones.', [['ajustes', 'Ir a Ajustes']]);
     const ret = A.returns(m, today);
-    const total = ret.value || 1;
-    const rows = ret.rows.map((r) => ({ r, name: r.asset.name, value: r.value, weight: r.value / total, invested: r.invested, gain: r.gain, pct: r.pct, annual: r.annual, m30: Calc.priceChange(r.asset, m.idx, 30) }));
-    const { key, dir } = state.invSort;
-    rows.sort((a, b) => key === 'name' ? dir * a.name.localeCompare(b.name, 'es') : dir * ((a[key] == null ? -Infinity : a[key]) - (b[key] == null ? -Infinity : b[key])));
     const missing = list.filter((a) => !ret.rows.some((r) => r.asset.id === a.id));
     const contrib = A.monthlyContributions(m);
     return html`
@@ -429,15 +480,10 @@
         <div class="chart-wrap"><div id="chart-invest" class="chart"></div></div>
         <div class="chart-foot"><div class="legend"><span><i style="background:var(--accent)"></i>Valor</span><span><i class="dash"></i>Capital aportado</span></div></div></section>
       <section class="panel"><div class="panel-head"><div><h2>Tus productos</h2><div class="sub">Toca uno para ver su gráfica, corregir un precio o cambiar tus participaciones</div></div></div>
-        <div class="table-scroll"><table><thead><tr>${INV_COLS.map(([k, l, r]) => html`<th class="${r ? 'r ' : ''}sortable" data-action="sort-inv" data-key="${k}" role="button" tabindex="0" style="cursor:pointer">${l}${key === k ? (dir > 0 ? ' ▲' : ' ▼') : ''}</th>`)}<th>Precio</th></tr></thead>
-        <tbody>${rows.map((x) => html`<tr class="click" data-action="open-asset" data-id="${x.r.asset.id}">
-          <td><span class="name-cell"><span class="sw" style="background:var(--c-${x.r.asset.category})"></span><span>${x.r.asset.name}<span class="sub">${[x.r.asset.entity, Calc.CATEGORIES[x.r.asset.category].label].filter(Boolean).join(' · ')}${x.r.asset.plan ? ' · aporta ' + Calc.fmtEUR(Number(x.r.asset.plan.amount)) + '/mes' : ''}</span></span></span></td>
-          <td class="r num">${Calc.fmtEUR(x.value)}</td><td class="r num">${pctPlain.format(x.weight)}</td><td class="r num">${Calc.fmtEUR(x.invested)}</td>
-          <td class="r num ${changeClass(x.gain)}">${Calc.fmtSigned(x.gain)}</td><td class="r num ${x.pct == null ? '' : changeClass(x.pct)}">${x.pct == null ? '—' : Calc.fmtPct(x.pct)}</td>
-          <td class="r num ${x.annual == null ? '' : changeClass(x.annual)}" title="${x.annual == null ? 'Con menos de 6 meses no se anualiza' : 'Rentabilidad anual equivalente'}">${x.annual == null ? '—' : Calc.fmtPct(x.annual)}</td>
-          <td class="r num ${x.m30 == null ? '' : changeClass(x.m30)}">${x.m30 == null ? '—' : Calc.fmtPct(x.m30)}</td>
-          <td>${x.r.info.stale ? html`<span class="pill warn">del ${Calc.fmtDate(x.r.info.priceDate, false)}</span>` : html`<span class="pill on">al día</span>`}</td></tr>`)}</tbody>
-        <tfoot><tr><td>Total</td><td class="r num">${Calc.fmtEUR(ret.value)}</td><td class="r num">100 %</td><td class="r num">${Calc.fmtEUR(ret.invested)}</td><td class="r num ${changeClass(ret.gain)}">${Calc.fmtSigned(ret.gain)}</td><td class="r num">${ret.pct != null ? Calc.fmtPct(ret.pct) : '—'}</td><td class="r num ${ret.annual == null ? '' : changeClass(ret.annual)}">${ret.annual == null ? '—' : Calc.fmtPct(ret.annual)}</td><td></td><td></td></tr></tfoot></table></div>
+        <div class="inv-filter"><input type="search" id="inv-filter" data-inv-filter list="inv-entities" autocomplete="off" placeholder="Filtrar por entidad o nombre: Andbank, Santander, empresa…" value="${state.invFilter}" aria-label="Filtrar productos">
+          <datalist id="inv-entities">${invEntities(ret).map((e) => html`<option value="${e.name}"></option>`)}</datalist>
+          <div class="chips" id="inv-chips">${invChips(ret)}</div></div>
+        <div id="inv-table-wrap">${invTable()}</div>
         ${missing.length ? html`<p class="small muted" style="padding:10px 18px 0">Sin precio o participaciones todavía: ${missing.map((a) => a.name).join(', ')}.</p>` : ''}
         <p class="small muted" style="padding:10px 18px 16px">«Aportado» suma cada compra (participaciones nuevas × precio de ese día, ya con tu parte). Es una estimación: si los precios históricos son aproximados, el beneficio también lo es. «Anualizada» es la rentabilidad por año que equivale a tus aportaciones según el día en que las hiciste; no se calcula con menos de 6 meses.</p></section>`;
   }
@@ -837,6 +883,7 @@
     },
     'heat-mode': (t) => { state.heat = t.dataset.mode === 'pct' ? 'pct' : 'eur'; store.set('heat', state.heat); renderView(); },
     'cmp-preset': (t) => { state.cmp = { from: t.dataset.from, to: Calc.todayStr() }; renderView(); },
+    'inv-entity': (t) => { state.invFilter = t.dataset.entity || ''; renderView(); },
     'donut-mode': (t) => { state.donut = t.dataset.mode; renderView(); },
     'toggle-cat': (t) => {
       const c = t.dataset.cat, h = state.hiddenCats;
@@ -994,6 +1041,13 @@
   }, true);
   document.addEventListener('input', (e) => {
     const t = e.target;
+    if (t.matches && t.matches('input[data-inv-filter]')) {
+      state.invFilter = t.value;
+      const w = $('#inv-table-wrap'), c = $('#inv-chips');
+      if (w) w.innerHTML = invTable().s;
+      if (c) c.innerHTML = invChips(A.returns(state.model, Calc.todayStr())).s;
+      return;
+    }
     if (t.dataset && t.dataset.proj) {
       state.proj[t.dataset.proj] = Number(t.value);
       const o = $('#pr-' + t.dataset.proj + '-o');
