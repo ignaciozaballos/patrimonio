@@ -31,7 +31,7 @@
   const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', rng: { main: { k: '1a' }, month: { k: '1a' }, inv: { k: '1a' } }, revealed: false, dlg: null,
     hide: store.get('hide') === '1', hiddenCats: new Set(), notesOpen: store.get('notes') !== '0', donut: 'cat', invSort: { key: 'value', dir: -1 },
     goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 },
-    heat: store.get('heat') === 'pct' ? 'pct' : 'eur', cmp: null, invFilter: '' };
+    heat: store.get('heat') === 'pct' ? 'pct' : 'eur', cmp: null, invFilter: '', notesView: 'pend' };
 
   // ---------- avisos ----------
   let toastTimer;
@@ -58,6 +58,34 @@
     finally { if (btn) btn.disabled = false; }
   }
   const must = ({ data, error }) => { if (error) throw error; return data; };
+
+
+  // ---------- avisos leídos (guardado en este navegador, por usuario) ----------
+  const readKey = () => 'read.' + (state.user ? state.user.id : '');
+  function readSet() {
+    try { return new Set(JSON.parse(store.get(readKey()) || '[]')); } catch (e) { return new Set(); }
+  }
+  function setRead(key, on, active) {
+    const r = readSet();
+    if (on) r.add(key); else r.delete(key);
+    const keep = new Set(active); // los avisos resueltos se olvidan: si vuelven, vuelven como pendientes
+    store.set(readKey(), JSON.stringify([...r].filter((k) => keep.has(k))));
+  }
+  function notesPanel(notes) {
+    if (!notes.length) return html``;
+    const rd = readSet();
+    const pend = notes.filter((a) => !rd.has(a.key)), read = notes.filter((a) => rd.has(a.key));
+    const view = state.notesView === 'read' ? 'read' : 'pend', list = view === 'read' ? read : pend;
+    const li = (a) => html`<li class="${a.level}"><label class="note-check"><input type="checkbox" data-read-key="${a.key}"${view === 'read' ? raw(' checked') : ''} aria-label="${view === 'read' ? 'Marcar como pendiente' : 'Marcar como leído'}"></label><button type="button" data-action="alert-go" data-tab="${a.tab}" data-asset="${a.asset || ''}">${a.text}</button></li>`;
+    return html`<details class="panel notes-panel" id="notes-panel"${state.notesOpen ? raw(' open') : ''}><summary class="panel-head"><div><h2>Avisos <span class="count">${pend.length}</span></h2><div class="sub">${pend.length ? 'Datos que conviene revisar' : 'Todo revisado'}</div></div><span class="chev" aria-hidden="true"></span></summary>
+      <div class="chips notes-filter" role="group" aria-label="Filtrar avisos"><button type="button" class="chip" data-action="notes-view" data-view="pend" aria-pressed="${view === 'pend'}">Pendientes (${pend.length})</button><button type="button" class="chip" data-action="notes-view" data-view="read" aria-pressed="${view === 'read'}">Leídos (${read.length})</button></div>
+      ${list.length ? html`<ul class="notes">${list.map(li)}</ul>` : html`<p class="muted small notes-empty">${view === 'read' ? 'Aún no has marcado ningún aviso como leído.' : 'No hay avisos pendientes.'}</p>`}</details>`;
+  }
+
+  function refreshNotes() {
+    const el = $('#notes-panel');
+    if (el) el.outerHTML = notesPanel(Calc.alerts(state.model, Calc.todayStr())).s;
+  }
 
   // ---------- arranque ----------
   async function boot() {
@@ -247,8 +275,7 @@
     const ch = Calc.change(m, 30), yt = A.ytd(m, today), ret = A.returns(m, today), conc = A.concentration(m, today);
     const loans = A.loans(m, today), quotas = loans.reduce((s, l) => s + l.payment * l.share, 0);
     const kd30 = ch ? html`<span class="${changeClass(ch.abs)}">${Calc.fmtSigned(ch.abs)}${ch.pct != null ? html` (${Calc.fmtPct(ch.pct)})` : ''}</span> en 30 días` : 'Variación a 30 días cuando haya un mes de historial';
-    const notesHtml = notes.length ? html`<details class="panel notes-panel" id="notes-panel"${state.notesOpen ? raw(' open') : ''}><summary class="panel-head"><div><h2>Avisos <span class="count">${notes.length}</span></h2><div class="sub">Datos que conviene revisar</div></div><span class="chev" aria-hidden="true"></span></summary>
-      <ul class="notes">${notes.map((a) => html`<li class="${a.level}"><button type="button" data-action="alert-go" data-tab="${a.tab}" data-asset="${a.asset || ''}">${a.text}</button></li>`)}</ul></details>` : '';
+    const notesHtml = notesPanel(notes);
 
     const goal = state.goal, eta = goal ? A.goalETA(m, goal) : null;
     const goalHtml = goal ? html`<div class="goal-line"><b class="num">${Calc.fmtEUR(net)}</b><span class="muted">de ${Calc.fmtEUR(goal)}</span></div>
@@ -915,6 +942,7 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 3000);
       toast('Evolución descargada');
     },
+    'notes-view': (t) => { state.notesView = t.dataset.view === 'read' ? 'read' : 'pend'; refreshNotes(); },
     'alert-go': (t) => { setTab(t.dataset.tab); if (t.dataset.asset) openAsset(t.dataset.asset); },
     'open-asset': (t) => openAsset(t.dataset.id),
     'open-manual': (t) => openManual(t.dataset.id),
@@ -1060,6 +1088,12 @@
   });
   document.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.matches && t.matches('input[data-read-key]')) {
+      const active = Calc.alerts(state.model, Calc.todayStr()).map((a) => a.key);
+      setRead(t.dataset.readKey, t.checked, active);
+      refreshNotes();
+      return;
+    }
     if (t.matches && t.matches('input[data-cmp]')) {
       const c = cmpState();
       if (t.value) c[t.dataset.cmp] = t.value;
