@@ -205,26 +205,52 @@
     return Number(now.price) / Number(then.price) - 1;
   }
 
-  /** Avisos para mostrar en el resumen. */
+  /** Último día de mes ya alcanzado: hoy si hoy es fin de mes; si no, el fin del mes anterior. */
+  function dueMonthEnd(today) {
+    const [y, m] = today.split('-').map(Number);
+    const thisEnd = fromTs(Date.UTC(y, m, 0));
+    return today >= thisEnd ? thisEnd : fromTs(Date.UTC(y, m - 1, 0));
+  }
+
+  /** Productos que se actualizan a mano a fin de mes: cuentas, deudas sin cuota automática y
+   *  productos sin fuente (p. ej. fondos privados con 1 participación). El inmobiliario queda fuera. */
+  function isMonthEndManual(a) {
+    if (a.category === 'inmobiliario' || a.loan) return false;
+    return a.valuation !== 'units' || (Array.isArray(a.sources) && a.sources.length === 0);
+  }
+
+  /** Avisos para mostrar en el resumen. Cada uno lleva una `key` estable: cambia cuando cambia el motivo,
+   *  de modo que un aviso leído vuelve a aparecer como pendiente si surge uno nuevo. */
   function alerts(model, today) {
     const out = [];
+    const due = dueMonthEnd(today);
+    const dueLabel = fmtDate(due).replace(/^\d+ /, '');
     for (const a of model.assets) {
       if (!a.active) continue;
       const info = latestInfo(a, model.idx, today);
+      const monthEnd = isMonthEndManual(a);
+      const lastDate = a.valuation === 'units' ? info.priceDate : info.date;
       if (a.valuation === 'units') {
-        if (info.missingUnits) out.push({ level: 'warn', text: `${a.name}: faltan las participaciones.`, tab: 'inversiones', asset: a.id });
-        else if (info.missingPrice) out.push({ level: 'warn', text: `${a.name}: todavía no tiene precio. Espera al flujo de GitHub o introdúcelo a mano.`, tab: 'inversiones', asset: a.id });
-        else if (info.stale) out.push({ level: 'warn', text: `${a.name}: el último precio es del ${fmtDate(info.priceDate)} (hace ${info.age} días).`, tab: 'inversiones', asset: a.id });
+        if (info.missingUnits) { out.push({ level: 'warn', key: `${a.id}|sin-participaciones`, text: `${a.name}: faltan las participaciones.`, tab: 'inversiones', asset: a.id }); continue; }
+        if (info.missingPrice) { out.push({ level: 'warn', key: `${a.id}|sin-precio`, text: `${a.name}: todavía no tiene precio. Espera al flujo de GitHub o introdúcelo a mano.`, tab: 'inversiones', asset: a.id }); continue; }
       } else if (info.missingValue) {
-        out.push({ level: 'info', text: `${a.name}: sin valor todavía. Añádelo en Actualizar.`, tab: 'actualizar' });
+        out.push({ level: 'info', key: `${a.id}|sin-valor`, text: `${a.name}: sin valor todavía. Añádelo en Actualizar.`, tab: 'actualizar' });
+        continue;
+      }
+      const tab = a.valuation === 'units' ? 'inversiones' : 'actualizar';
+      if (monthEnd) {
+        if (lastDate < due) out.push({ level: 'warn', key: `${a.id}|cierre|${due}`, text: `${a.name}: falta el valor de cierre de ${dueLabel} (último dato: ${fmtDate(lastDate)}).`, tab, asset: a.valuation === 'units' ? a.id : undefined });
+      } else if (a.valuation === 'units') {
+        if (info.stale) out.push({ level: 'warn', key: `${a.id}|precio-antiguo|${info.priceDate}`, text: `${a.name}: el último precio es del ${fmtDate(info.priceDate)} (hace ${info.age} días).`, tab, asset: a.id });
       } else if (info.stale) {
-        out.push({ level: 'info', text: `${a.name}: sin actualizar desde el ${fmtDate(info.date)}.`, tab: 'actualizar' });
+        out.push({ level: 'info', key: `${a.id}|sin-actualizar|${info.date}`, text: `${a.name}: sin actualizar desde el ${fmtDate(info.date)}.`, tab });
       }
     }
     return out;
   }
 
   return {
+    dueMonthEnd, isMonthEndManual,
     CATEGORIES, LIST_ORDER, STACK_ORDER, STALE_DAYS,
     toTs, fromTs, daysBetween, addDays, todayStr,
     fmtEUR, fmtSigned, fmtNum, fmtPct, fmtCompactEUR, fmtDate, parseAmount,
