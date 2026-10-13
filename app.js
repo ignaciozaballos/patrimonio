@@ -28,7 +28,7 @@
     get(k) { try { return localStorage.getItem('patrimonio.' + k); } catch (e) { return null; } },
     set(k, v) { try { if (v == null) localStorage.removeItem('patrimonio.' + k); else localStorage.setItem('patrimonio.' + k, String(v)); } catch (e) { /* sin almacenamiento */ } },
   };
-  const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', range: '1a', revealed: false, dlg: null,
+  const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', rng: { main: { k: '1a' }, month: { k: 'todo' }, inv: { k: '1a' } }, revealed: false, dlg: null,
     hide: store.get('hide') === '1', hiddenCats: new Set(), notesOpen: store.get('notes') !== '0', donut: 'cat', invSort: { key: 'value', dir: -1 },
     goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 } };
 
@@ -203,17 +203,34 @@
   const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
   const monthLabel = (k) => MES[Number(k.slice(5)) - 1] + (k.slice(5) === '01' ? ' ' + k.slice(2, 4) : '');
   const ENTITY_COLORS = ['#2563eb', '#f59e0b', '#14b8a6', '#8b5cf6', '#ec4899', '#64748b', '#84cc16', '#06b6d4'];
-  const RANGES = [['1m', '1M'], ['3m', '3M'], ['6m', '6M'], ['ytd', 'Año'], ['1a', '1A'], ['todo', 'Todo']];
+  const RANGES = [['1m', '1M'], ['3m', '3M'], ['6m', '6M'], ['ytd', 'Año'], ['1a', '1A'], ['3a', '3A'], ['5a', '5A'], ['todo', 'Todo'], ['custom', 'Personalizado']];
+  const RANGE_DAYS = { '1m': 31, '3m': 92, '6m': 183, '1a': 365, '3a': 1096, '5a': 1827 };
 
-  const rangeSeg = () => html`<div class="seg" role="group" aria-label="Periodo del gráfico">${RANGES.map(([k, l]) => html`<button type="button" data-action="range" data-range="${k}" aria-pressed="${state.range === k}">${l}</button>`)}</div>`;
-  function cutIndex(dates) {
-    const n = dates.length;
-    if (state.range === 'todo' || !n) return 0;
-    const last = dates[n - 1];
-    const cut = state.range === 'ytd' ? last.slice(0, 4) + '-01-01'
-      : Calc.addDays(last, { '1m': -31, '3m': -92, '6m': -183, '1a': -365 }[state.range]);
-    const i = dates.findIndex((d) => d >= cut);
-    return i < 0 || n - i < 2 ? 0 : i;
+  /** Selector de periodo (con fechas propias si es «Personalizado»). id = main | month | inv */
+  function rangeControl(id) {
+    const r = state.rng[id], d = state.model.dates;
+    return html`<div class="range-ctl"><div class="seg" role="group" aria-label="Periodo">${RANGES.map(([k, l]) => html`<button type="button" data-action="range" data-rng="${id}" data-range="${k}" aria-pressed="${r.k === k}">${l}</button>`)}</div>
+      ${r.k === 'custom' ? html`<div class="range-dates"><label>Desde <input type="date" data-rng-date="${id}" data-edge="from" value="${r.from || d[0] || ''}" min="${d[0] || ''}" max="${d[d.length - 1] || ''}"></label>
+        <label>Hasta <input type="date" data-rng-date="${id}" data-edge="to" value="${r.to || d[d.length - 1] || ''}" min="${d[0] || ''}" max="${d[d.length - 1] || ''}"></label></div>` : ''}</div>`;
+  }
+  /** Fechas desde-hasta del periodo elegido. */
+  function rangeDates(id) {
+    const r = state.rng[id], d = state.model.dates, n = d.length;
+    if (!n) return { from: null, to: null };
+    const last = d[n - 1];
+    if (r.k === 'todo') return { from: d[0], to: last };
+    if (r.k === 'custom') return { from: r.from || d[0], to: r.to || last };
+    if (r.k === 'ytd') return { from: last.slice(0, 4) + '-01-01', to: last };
+    return { from: Calc.addDays(last, -RANGE_DAYS[r.k]), to: last };
+  }
+  /** Índices [i0, i1] del modelo dentro del periodo (al menos 2 puntos; si no, todo). */
+  function rangeIdx(id) {
+    const dates = state.model.dates, { from, to } = rangeDates(id);
+    let i0 = dates.findIndex((x) => x >= from), i1 = -1;
+    for (let k = 0; k < dates.length; k++) if (dates[k] <= to) i1 = k;
+    if (i0 < 0) i0 = 0;
+    if (i1 - i0 < 1) return { i0: 0, i1: dates.length - 1, fallback: true };
+    return { i0, i1 };
   }
   const changeClass = (v) => (v >= 0 ? 'pos' : 'neg');
 
@@ -256,11 +273,6 @@
         <div class="mini"><div class="v num">${pctPlain.format(conc.debtPct)}</div><div class="l">deudas sobre tus activos</div></div></div>` : '';
 
     return html`
-      <section class="panel"><div class="panel-head"><div><h2>Evolución del patrimonio</h2><div class="sub">Pulsa un tipo de la leyenda para quitarlo o ponerlo y ver la evolución conjunta de los demás</div></div>${rangeSeg()}</div>
-        ${n >= 2 ? html`<div class="chart-wrap"><div id="chart-main" class="chart"></div></div>
-          <div class="chart-foot"><div class="legend legend-buttons" id="legend-main"></div></div>` : html`<p class="chart-empty">La gráfica aparece cuando hay datos de dos fechas distintas.</p>`}
-        <div class="panel-sep"><h3>Mes a mes</h3><p class="sub">Cuánto ha cambiado tu patrimonio neto cada mes (incluye aportaciones y mercado)</p></div>
-        <div class="monthly"><div id="monthly-bars" class="chart-wrap" style="padding:0"></div><div class="table-scroll monthly-table" id="monthly-table"></div></div></section>
       <div class="kpis">
         <div class="kpi"><div class="kl">${debt > 0.005 ? 'Patrimonio neto' : 'Patrimonio'}</div><div class="kv num">${Calc.fmtEUR(net)}</div><div class="kd">${kd30}</div></div>
         <div class="kpi" style="--kc:var(--c-efectivo)"><div class="kl">Activos</div><div class="kv num">${Calc.fmtEUR(gross)}</div><div class="kd">${conc ? conc.count + ' productos' : ''}${yt ? html` · <span class="${changeClass(yt.abs)}">${Calc.fmtSigned(yt.abs)}</span> ${yt.partial ? 'desde el inicio' : 'en el año'}` : ''}</div></div>
@@ -268,6 +280,14 @@
         <div class="kpi" style="--kc:var(--c-plan_pensiones)"><div class="kl">Líquido</div><div class="kv num">${Calc.fmtEUR(conc ? conc.liquid : 0)}</div><div class="kd">${conc ? pctPlain.format(conc.liquidPct) + ' de tus activos' : ''}</div></div>
         <div class="kpi" style="--kc:var(--c-accion)"><div class="kl">Beneficio de inversiones</div><div class="kv num ${ret.rows.length ? changeClass(ret.gain) : ''}">${ret.rows.length ? Calc.fmtSigned(ret.gain) : '—'}</div><div class="kd">${ret.pct != null ? html`${Calc.fmtPct(ret.pct)} sobre <span class="num">${Calc.fmtEUR(ret.invested)}</span> aportados` : 'Estimado con tus compras'}</div></div>
       </div>
+      <section class="panel"><div class="panel-head"><div><h2>Evolución del patrimonio</h2><div class="sub">Pulsa un tipo de la leyenda para quitarlo o ponerlo y ver la evolución conjunta de los demás</div></div>${rangeControl('main')}</div>
+        ${n >= 2 ? html`<div class="chart-wrap"><div id="chart-main" class="chart"></div></div>
+          <div class="chart-foot"><div class="legend legend-buttons" id="legend-main"></div></div>` : html`<p class="chart-empty">La gráfica aparece cuando hay datos de dos fechas distintas.</p>`}
+      </section>
+      <section class="panel" id="month-panel"><div class="panel-head"><div><h2>Mes a mes</h2><div class="sub">Cuánto ha cambiado tu patrimonio neto cada mes (incluye aportaciones y mercado)</div></div>${rangeControl('month')}</div>
+        <div class="stat-row" id="month-stats"></div>
+        <div class="chart-wrap" id="monthly-bars"></div>
+        <div class="table-scroll monthly-table" id="monthly-table"></div></section>
       ${notesHtml}
       <div class="grid-half">
         <section class="panel"><div class="panel-head"><div><h2>Reparto</h2><div class="sub">Dónde está tu dinero</div></div>
@@ -288,12 +308,13 @@
   function drawMain() {
     const host = $('#chart-main');
     if (!host) return;
-    const m = state.model, i0 = cutIndex(m.dates), hidden = state.hiddenCats;
-    const dates = m.dates.slice(i0);
-    const all = Calc.STACK_ORDER.map((c) => ({ key: c, label: Calc.CATEGORIES[c].label, color: `var(--c-${c})`, values: m.byCat[c].slice(i0) })).filter((x) => x.values.some((v) => v > 0.005));
+    const m = state.model, { i0, i1 } = rangeIdx('main'), hidden = state.hiddenCats;
+    const cut = (arr) => arr.slice(i0, i1 + 1);
+    const dates = cut(m.dates);
+    const all = Calc.STACK_ORDER.map((c) => ({ key: c, label: Calc.CATEGORIES[c].label, color: `var(--c-${c})`, values: cut(m.byCat[c]) })).filter((x) => x.values.some((v) => v > 0.005));
     const series = all.filter((x) => !hidden.has(x.key));
-    const debt = m.byCat.deuda.slice(i0), net = m.net.slice(i0);
-    const gross = m.gross.slice(i0);
+    const debt = cut(m.byCat.deuda), net = cut(m.net);
+    const gross = cut(m.gross);
     const filtered = hidden.size > 0;
     const hasDebt = !filtered && debt.some((v) => v > 0.005);
     const total = dates.map((_, i) => series.reduce((sum, x) => sum + (x.values[i] || 0), 0));
@@ -326,14 +347,27 @@
   }
 
   function drawMonthly() {
-    const bars = $('#monthly-bars'), tbl = $('#monthly-table');
-    if (!bars || !tbl) return;
-    const mo = A.monthly(state.model).slice(-13);
-    const withDelta = mo.filter((r) => r.delta != null);
-    if (!withDelta.length) { bars.innerHTML = '<p class="chart-empty">Necesitas al menos dos meses de datos.</p>'; return; }
-    Charts.bars(bars, withDelta.map((r) => ({ label: monthLabel(r.month), value: r.delta })), { fmtSigned: Calc.fmtSigned, ariaLabel: 'Variación mensual del patrimonio neto' });
-    tbl.innerHTML = `<table><thead><tr><th>Mes</th><th class="r">Patrimonio neto</th><th class="r">Variación</th></tr></thead><tbody>${mo.slice().reverse().map((r) =>
-      `<tr><td>${esc(monthLabel(r.month))}</td><td class="r num">${esc(Calc.fmtEUR(r.net))}</td><td class="r num ${r.delta == null ? '' : changeClass(r.delta)}">${r.delta == null ? '—' : esc(Calc.fmtSigned(r.delta)) + (r.pct != null ? ' · ' + esc(Calc.fmtPct(r.pct)) : '')}</td></tr>`).join('')}</tbody></table>`;
+    const bars = $('#monthly-bars'), tbl = $('#monthly-table'), stats = $('#month-stats');
+    if (!bars || !tbl || !stats) return;
+    const m = state.model, { from, to } = rangeDates('month');
+    const all = A.monthly(m);
+    const rows = all.filter((r) => r.date > from && r.date <= to && r.delta != null);
+    const st = A.periodStats(m, from, to);
+    if (!st || !rows.length) {
+      stats.innerHTML = ''; tbl.innerHTML = '';
+      bars.innerHTML = '<p class="chart-empty">No hay datos mensuales en ese periodo. Elige un periodo más largo.</p>';
+      return;
+    }
+    const sgn = (v) => (v >= 0 ? 'pos' : 'neg');
+    const lbl = (a, b) => `${Calc.fmtDate(a)} – ${Calc.fmtDate(b)}`;
+    const box = (cls, title, big, small) => `<div class="stat"><div class="kl">${title}</div><div class="sv num ${cls}">${big}</div><div class="kd">${small}</div></div>`;
+    stats.innerHTML =
+      box(sgn(st.generated), 'Patrimonio neto generado', esc(Calc.fmtSigned(st.generated)), `${st.genPct != null ? esc(Calc.fmtPct(st.genPct)) + ' · ' : ''}${esc(lbl(st.fromDate, st.toDate))}`) +
+      box(sgn(st.avgMonthly), 'Evolución mensual media', esc(Calc.fmtSigned(st.avgMonthly)) + ' <small>al mes</small>', `${st.avgPct != null ? esc(Calc.fmtPct(st.avgPct)) + ' al mes (compuesto) · ' : ''}${rows.length} ${rows.length === 1 ? 'mes' : 'meses'}`) +
+      box(sgn(st.debtReduction), 'Reducción de deuda total', esc(st.debtReduction >= 0 ? Calc.fmtEUR(st.debtReduction) : '+' + Calc.fmtEUR(-st.debtReduction)), st.debtStart > 0.005 || st.debtEnd > 0.005 ? `${st.debtReduction >= 0 ? 'De' : 'Ha subido de'} ${esc(Calc.fmtEUR(st.debtStart))} a ${esc(Calc.fmtEUR(st.debtEnd))}` : 'Sin deudas en este periodo');
+    Charts.bars(bars, rows.map((r) => ({ label: monthLabel(r.month), value: r.delta })), { fmtSigned: Calc.fmtSigned, ariaLabel: 'Variación mensual del patrimonio neto' });
+    tbl.innerHTML = `<table><thead><tr><th>Mes</th><th class="r">Patrimonio neto</th><th class="r">Variación</th><th class="r">%</th><th class="r">Activos</th><th class="r">Deudas</th></tr></thead><tbody>${rows.slice().reverse().map((r) =>
+      `<tr><td>${esc(monthLabel(r.month))}</td><td class="r num">${esc(Calc.fmtEUR(r.net))}</td><td class="r num ${sgn(r.delta)}">${esc(Calc.fmtSigned(r.delta))}</td><td class="r num ${r.pct == null ? '' : sgn(r.pct)}">${r.pct == null ? '—' : esc(Calc.fmtPct(r.pct))}</td><td class="r num">${esc(Calc.fmtEUR(r.gross))}</td><td class="r num">${r.debt > 0.005 ? '−' : ''}${esc(Calc.fmtEUR(r.debt))}</td></tr>`).join('')}</tbody></table>`;
   }
 
   // ---------- inversiones ----------
@@ -356,7 +390,7 @@
         <div class="kpi" style="--kc:${ret.gain >= 0 ? 'var(--positive)' : 'var(--negative)'}"><div class="kl">Beneficio</div><div class="kv num ${changeClass(ret.gain)}">${Calc.fmtSigned(ret.gain)}</div><div class="kd">${ret.pct != null ? Calc.fmtPct(ret.pct) : ''}</div></div>
         <div class="kpi" style="--kc:var(--c-plan_pensiones)"><div class="kl">Aportación mensual</div><div class="kv num">${contrib > 0 ? Calc.fmtEUR(contrib) : '—'}</div><div class="kd">${contrib > 0 ? Calc.fmtEUR(contrib * 12) + ' al año' : 'Sin aportaciones automáticas'}</div></div>
       </div>
-      <section class="panel"><div class="panel-head"><div><h2>Valor frente a lo aportado</h2><div class="sub">La distancia entre las dos líneas es tu beneficio</div></div>${rangeSeg()}</div>
+      <section class="panel"><div class="panel-head"><div><h2>Valor frente a lo aportado</h2><div class="sub">La distancia entre las dos líneas es tu beneficio</div></div>${rangeControl('inv')}</div>
         <div class="chart-wrap"><div id="chart-invest" class="chart"></div></div>
         <div class="chart-foot"><div class="legend"><span><i style="background:var(--accent)"></i>Valor</span><span><i class="dash"></i>Capital aportado</span></div></div></section>
       <section class="panel"><div class="panel-head"><div><h2>Tus productos</h2><div class="sub">Toca uno para ver su gráfica, corregir un precio o cambiar tus participaciones</div></div></div>
@@ -376,8 +410,8 @@
     const host = $('#chart-invest');
     if (!host) return;
     const m = state.model;
-    const i0 = cutIndex(m.dates), dates = m.dates.slice(i0);
-    const value = A.investValueSeries(m).slice(i0), invested = A.investedSeries(m).slice(i0);
+    const { i0, i1 } = rangeIdx('inv'), dates = m.dates.slice(i0, i1 + 1);
+    const value = A.investValueSeries(m).slice(i0, i1 + 1), invested = A.investedSeries(m).slice(i0, i1 + 1);
     if (dates.length < 2) { host.outerHTML = '<p class="chart-empty">La gráfica aparece cuando hay datos de dos fechas.</p>'; return; }
     Charts.draw(host, { dates, series: [{ label: 'Valor', color: 'var(--accent)', values: value }], lines: [{ label: 'Capital aportado', color: 'var(--text-dim)', values: invested }],
       diffRow: 'Beneficio', fmtSigned: Calc.fmtSigned, stacked: false, yMode: 'fit', fmt: Calc.fmtEUR,
@@ -706,9 +740,10 @@
     tab: (t) => { closeDialog(); setTab(t.dataset.tab); },
     close: () => closeDialog(),
     range: (t) => {
-      state.range = t.dataset.range;
-      document.querySelectorAll('[data-action="range"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.range === state.range)));
-      if (state.tab === 'resumen') drawMain(); else if (state.tab === 'inversiones') drawInvest();
+      const id = t.dataset.rng, r = state.rng[id];
+      r.k = t.dataset.range;
+      if (r.k !== 'custom') { delete r.from; delete r.to; }
+      renderView();
     },
     privacy: (t) => {
       state.hide = !state.hide; store.set('hide', state.hide ? '1' : null);
@@ -883,6 +918,13 @@
   });
   document.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.matches && t.matches('input[data-rng-date]')) {
+      const id = t.dataset.rngDate, r = state.rng[id];
+      r[t.dataset.edge] = t.value || undefined;
+      if (r.from && r.to && r.from > r.to) { const x = r.from; r.from = r.to; r.to = x; document.querySelectorAll(`input[data-rng-date="${id}"]`).forEach((i) => { i.value = r[i.dataset.edge]; }); }
+      if (id === 'main') drawMain(); else if (id === 'month') drawMonthly(); else if (id === 'inv') drawInvest();
+      return;
+    }
     if (t.matches && t.matches('input[data-amount]')) {
       const v = num(t.value);
       if (v != null) t.value = Calc.fmtNum(v, parseInt(t.dataset.amount, 10) || 2);
