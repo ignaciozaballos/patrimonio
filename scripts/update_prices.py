@@ -154,9 +154,19 @@ def _check_price(price: float, what: str) -> float:
 #  Fuentes de precio
 # ----------------------------------------------------------------------------
 def yahoo_search(isin: str) -> list[str]:
-    url = ("https://query2.finance.yahoo.com/v1/finance/search?q="
-           f"{urllib.parse.quote(isin)}&quotesCount=6&newsCount=0&listsCount=0")
-    data = json.loads(http_get(url))
+    # Yahoo limita (429) según el servidor: si uno rechaza, se prueba el otro
+    err: Exception | None = None
+    data = None
+    for host in ("query2", "query1"):
+        url = (f"https://{host}.finance.yahoo.com/v1/finance/search?q="
+               f"{urllib.parse.quote(isin)}&quotesCount=6&newsCount=0&listsCount=0")
+        try:
+            data = json.loads(http_get(url, retries=2))
+            break
+        except (FetchError, ValueError) as e:
+            err = e
+    if data is None:
+        raise err  # type: ignore[misc]
     out = []
     for q in data.get("quotes", []):
         if q.get("quoteType") in ("MUTUALFUND", "ETF", "EQUITY") and q.get("symbol"):
@@ -238,6 +248,15 @@ def src_ft_equity(cfg: dict) -> Quote:
     return parse_ft_equity(html_to_text(http_get(url)))
 
 
+def src_ft_etf(cfg: dict) -> Quote:
+    """ETF en FT: `id` es ISIN:EUR o el símbolo de su bolsa, p. ej. XAIX:GER."""
+    ident = cfg.get("id") or (cfg.get("isin", "") + ":EUR")
+    url = "https://markets.ft.com/data/etfs/tearsheet/summary?s=" + urllib.parse.quote(ident)
+    q = parse_ft(html_to_text(http_get(url)))
+    q.source = "ft_etf"
+    return q
+
+
 def parse_stooq(text: str) -> Quote:
     """CSV de https://stooq.com/q/l/?s=abvx.fr&f=sd2t2c&h&e=csv  ->  Symbol,Date,Time,Close"""
     rows = [r.strip() for r in text.strip().splitlines() if r.strip()]
@@ -312,6 +331,7 @@ SOURCES = {
     "quefondos": src_quefondos,
     "finect": src_finect,
     "ft_equity": src_ft_equity,
+    "ft_etf": src_ft_etf,
     "stooq": src_stooq,
     "url_regex": src_url_regex,
 }
@@ -644,7 +664,10 @@ def candidate_sources(ident: str) -> list[dict]:
     kind = classify(ident)
     if kind == "isin":
         return [{"type": "yahoo", "isin": ident}, {"type": "ft", "id": f"{ident}:EUR"},
+                {"type": "ft_etf", "id": f"{ident}:EUR"},
                 {"type": "finect", "isin": ident}, {"type": "quefondos", "kind": "fondos", "id": ident}]
+    if ":" in ident:  # símbolo de FT, p. ej. XAIX:GER (ETF o acción)
+        return [{"type": "ft_etf", "id": ident}, {"type": "ft_equity", "id": ident}]
     if kind == "finect_slug":  # p. ej. N5568-Indexa_empleo_autonomos_100_accs_ppes (final de la URL de Finect)
         return [{"type": "finect", "kind": "planes-pensiones", "id": ident}]
     if kind == "dgs":
