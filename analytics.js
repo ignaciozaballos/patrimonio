@@ -85,8 +85,23 @@
     });
     return out.map((r, k) => {
       const prev = k > 0 ? model.net[out[k - 1].i] : null, net = model.net[r.i];
-      return { month: r.month, date: r.date, net, delta: prev != null ? net - prev : null, pct: prev > 0 ? net / prev - 1 : null };
+      return { month: r.month, date: r.date, net, delta: prev != null ? net - prev : null, pct: prev > 0 ? net / prev - 1 : null,
+        gross: model.gross[r.i], debt: model.byCat.deuda[r.i] };
     });
+  }
+  /** Estadísticas entre dos fechas: patrimonio generado, media mensual y deuda reducida. */
+  function periodStats(model, from, to) {
+    const n = model.dates.length;
+    if (n < 2) return null;
+    let i0 = 0, i1 = -1;
+    for (let k = 0; k < n; k++) { if (model.dates[k] <= from) i0 = k; if (model.dates[k] <= to) i1 = k; }
+    if (i1 <= i0) return null;
+    const d0 = model.dates[i0], d1 = model.dates[i1];
+    const start = model.net[i0], end = model.net[i1], months = Calc.daysBetween(d0, d1) / 30.4375;
+    const generated = end - start;
+    return { fromDate: d0, toDate: d1, months, start, end, generated, genPct: start > 0 ? end / start - 1 : null,
+      avgMonthly: generated / months, avgPct: start > 0 && end > 0 && months > 0 ? Math.pow(end / start, 1 / months) - 1 : null,
+      debtStart: model.byCat.deuda[i0], debtEnd: model.byCat.deuda[i1], debtReduction: model.byCat.deuda[i0] - model.byCat.deuda[i1], i0, i1 };
   }
   function ytd(model, today) {
     const n = model.dates.length;
@@ -212,6 +227,6 @@
     return [head.join(';'), ...rows].join('\n');
   }
 
-  return { UNIT_CATS, INVEST_CATS, LIQUID_CATS, addMonths, nextOccurrence, flows, returns, investedSeries, investValueSeries, monthly, ytd,
+  return { UNIT_CATS, INVEST_CATS, LIQUID_CATS, addMonths, nextOccurrence, flows, returns, investedSeries, investValueSeries, monthly, periodStats, ytd,
     loanInfo, loans, upcoming, monthlyContributions, project, positions, byEntity, concentration, movers, goalETA, evolutionCSV };
 });
