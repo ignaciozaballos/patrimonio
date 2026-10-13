@@ -606,7 +606,7 @@ def run_plans(db, today: date, dry_run: bool = False, max_wait_days: int = 10) -
             if not px or (date.fromisoformat(px["date"]) - d).days > max_wait_days:
                 note = f"aportación del {d.isoformat()} pendiente: aún no hay precio de ese día"
                 break
-            units = round(units + amount / float(px["price"]), 4)
+            units = round(units + amount / float(px["price"]), 6)
             if not dry_run:
                 db.upsert_holding({"user_id": a["user_id"], "asset_id": a["id"], "date": d.isoformat(),
                                    "units": units})
