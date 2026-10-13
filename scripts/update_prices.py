@@ -385,6 +385,22 @@ class SupabaseDb:
     def get_loans(self) -> list[dict]:
         return self._request("GET", "/assets?select=id,user_id,name,loan&active=eq.true&loan=not.is.null&order=sort,name")
 
+    def get_plans(self) -> list[dict]:
+        return self._request("GET", "/assets?select=id,user_id,name,plan&active=eq.true&plan=not.is.null&order=sort,name")
+
+    def last_holding(self, asset_id: str) -> dict | None:
+        rows = self._request("GET", f"/holdings?select=date,units&asset_id=eq.{asset_id}&order=date.desc&limit=1")
+        return rows[0] if rows else None
+
+    def price_on_or_after(self, asset_id: str, d: str) -> dict | None:
+        rows = self._request(
+            "GET", f"/prices?select=date,price&asset_id=eq.{asset_id}&date=gte.{d}&order=date.asc&limit=1")
+        return rows[0] if rows else None
+
+    def upsert_holding(self, row: dict) -> None:
+        self._request("POST", "/holdings?on_conflict=asset_id,date", [row],
+                      {"Prefer": "resolution=merge-duplicates,return=minimal"})
+
     def loan_anchor(self, asset_id: str) -> dict | None:
         """Último valor anotado a mano (no calculado): el punto de partida de la amortización."""
         rows = self._request(
@@ -546,6 +562,60 @@ def run_loans(db, today: date, dry_run: bool = False) -> list[Result]:
     return results
 
 
+def plan_dates(day: int, anchor: date, today: date) -> list[date]:
+    """Fechas de aportación (día fijo de cada mes) posteriores a `anchor` y hasta `today`."""
+    if not (1 <= day <= 31):
+        raise ValueError("el día de aportación debe estar entre 1 y 31")
+    out: list[date] = []
+    y, m = anchor.year, anchor.month
+    while True:
+        d = _payment_date(y, m, day)
+        if d > today:
+            return out
+        if d > anchor:
+            out.append(d)
+        y, m = y + (m == 12), m % 12 + 1
+
+
+def run_plans(db, today: date, dry_run: bool = False, max_wait_days: int = 10) -> list[Result]:
+    """Aportaciones periódicas: cada mes suma importe / precio de ese día a las participaciones.
+    Parte de la última fecha de participaciones registrada; si cambias las participaciones a mano, continúa desde ahí."""
+    results: list[Result] = []
+    for a in db.get_plans():
+        name, cfg = a["name"], a.get("plan") or {}
+        try:
+            amount, day = float(cfg["amount"]), int(cfg["day"])
+            if amount <= 0:
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            results.append(Result(name, "APORTACIÓN", note="faltan importe o día de la aportación", failure=True))
+            continue
+        last = db.last_holding(a["id"])
+        if not last:
+            results.append(Result(name, "APORTACIÓN", note="indica primero las participaciones actuales"))
+            continue
+        anchor, units, done = date.fromisoformat(last["date"]), float(last["units"]), 0
+        try:
+            dates = plan_dates(day, anchor, today)
+        except ValueError as e:
+            results.append(Result(name, "APORTACIÓN", note=str(e), failure=True))
+            continue
+        note = ""
+        for d in dates:
+            px = db.price_on_or_after(a["id"], d.isoformat())
+            if not px or (date.fromisoformat(px["date"]) - d).days > max_wait_days:
+                note = f"aportación del {d.isoformat()} pendiente: aún no hay precio de ese día"
+                break
+            units = round(units + amount / float(px["price"]), 4)
+            if not dry_run:
+                db.upsert_holding({"user_id": a["user_id"], "asset_id": a["id"], "date": d.isoformat(),
+                                   "units": units})
+            done += 1
+        results.append(Result(name, "APORTACIÓN", units, date.fromisoformat(last["date"]) if not done else d,
+                              "aportación periódica", note or f"{done} aportación(es) de {amount:g} € añadidas"))
+    return results
+
+
 def render(results: list[Result], today: date, dry_run: bool) -> tuple[str, str]:
     """Devuelve (texto para consola, markdown para el resumen de GitHub)."""
     lines = [f"Actualización de precios · {today.isoformat()}" + (" (simulación)" if dry_run else "")]
@@ -639,6 +709,10 @@ def main(argv: list[str] | None = None) -> int:
         results += run_loans(db, today, args.dry_run)
     except Exception as e:  # p. ej. si aún no se ha añadido la columna 'loan' en Supabase
         results.append(Result("Préstamos", "ERROR", note=str(e)[:300], failure=True))
+    try:
+        results += run_plans(db, today, args.dry_run)
+    except Exception as e:  # p. ej. si aún no se ha añadido la columna 'plan' en Supabase
+        results.append(Result("Aportaciones", "ERROR", note=str(e)[:300], failure=True))
     text, md = render(results, today, args.dry_run)
     print(text)
     write_summary(md)
