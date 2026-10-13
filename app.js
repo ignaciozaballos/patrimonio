@@ -28,7 +28,7 @@
     get(k) { try { return localStorage.getItem('patrimonio.' + k); } catch (e) { return null; } },
     set(k, v) { try { if (v == null) localStorage.removeItem('patrimonio.' + k); else localStorage.setItem('patrimonio.' + k, String(v)); } catch (e) { /* sin almacenamiento */ } },
   };
-  const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', rng: { main: { k: '1a' }, month: { k: 'todo' }, inv: { k: '1a' } }, revealed: false, dlg: null,
+  const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', rng: { main: { k: '1a' }, month: { k: '1a' }, inv: { k: '1a' } }, revealed: false, dlg: null,
     hide: store.get('hide') === '1', hiddenCats: new Set(), notesOpen: store.get('notes') !== '0', donut: 'cat', invSort: { key: 'value', dir: -1 },
     goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 } };
 
