@@ -24,12 +24,12 @@
   --warn: #b86e00;
   --grid: #dde6f5;
 
-  --c-efectivo: #62b8ff;
-  --c-fondo: #1f5eff;
-  --c-accion: #0a2463;
-  --c-plan_pensiones: #6f7df2;
-  --c-inmobiliario: #a9bfe9;
-  --c-deuda: #d9363e;
+  --c-efectivo: #14b8a6;
+  --c-fondo: #2563eb;
+  --c-accion: #f59e0b;
+  --c-plan_pensiones: #8b5cf6;
+  --c-inmobiliario: #94a3b8;
+  --c-deuda: #e5484d;
 
   --radius-sm: 8px;
   --radius-md: 18px;
@@ -63,11 +63,11 @@
     --grid: #22325c;
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
 
-    --c-efectivo: #6dc0ff;
-    --c-fondo: #4a7dff;
-    --c-accion: #9db8ff;
-    --c-plan_pensiones: #8a96ff;
-    --c-inmobiliario: #4b6199;
+    --c-efectivo: #2dd4bf;
+    --c-fondo: #5b8cff;
+    --c-accion: #fbbf24;
+    --c-plan_pensiones: #a78bfa;
+    --c-inmobiliario: #6b7fa6;
     --c-deuda: #ff6b72;
   }
 }
@@ -175,7 +175,8 @@ header.top {
 .chart .topline { fill: none; stroke-width: 2.4; stroke-linejoin: round; stroke-linecap: round; }
 .chart .refline { fill: none; stroke-width: 1.6; }
 .chart .refline.dashed { stroke-dasharray: 6 5; }
-.chart .ylabel, .chart .xlabel, .chart-svg .xlabel { fill: var(--text-faint); font: 500 11px var(--font-body); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
+.chart .ylabel, .chart .xlabel, .chart-svg .xlabel { fill: var(--text-dim); font: 500 11px var(--font-body); }
+.chart .axis, .chart-svg .axis { stroke: var(--border); stroke-width: 1; }
 .chart .cursor { stroke: var(--text-dim); stroke-width: 1; opacity: 0.5; }
 .chart-tip {
   position: absolute; z-index: 2; min-width: 176px; pointer-events: none; background: var(--surface);
@@ -192,6 +193,12 @@ header.top {
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--text-dim); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.legend-buttons { gap: 6px 8px; }
+.legend-toggle { appearance: none; background: none; border: 1px solid var(--border-soft); border-radius: 20px; padding: 4px 11px 4px 9px; font: 500 12px var(--font-body); color: var(--text); display: inline-flex; align-items: center; gap: 7px; cursor: pointer; transition: opacity 0.15s, background 0.15s; }
+.legend-toggle:hover { background: var(--surface-alt); }
+.legend-toggle i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.legend-toggle.off { opacity: 0.45; text-decoration: line-through; }
+.legend-toggle.off i { background: transparent !important; box-shadow: inset 0 0 0 2px var(--text-faint); }
 .legend i.dash { height: 0; width: 16px; border-top: 2px dashed var(--text-dim); border-radius: 0; }
 .bar.up { fill: var(--positive); opacity: 0.85; } .bar.down { fill: var(--negative); opacity: 0.85; }
 .barval { fill: var(--text-dim); font: 600 10.5px var(--font-body); }
@@ -364,3 +371,22 @@ dialog::backdrop { background: rgb(5 10 25 / 0.5); }
 .skip { position: absolute; left: -9999px; }
 .skip:focus { left: 8px; top: 8px; background: var(--surface); padding: 8px 12px; z-index: 70; }
 footer.foot { max-width: 1280px; margin: 0 auto; padding: 0 var(--gutter) 40px; color: var(--text-faint); font-size: 11.5px; }
+
+/* ---------- avisos desplegables ---------- */
+.notes-panel > summary { list-style: none; cursor: pointer; }
+.notes-panel > summary::-webkit-details-marker { display: none; }
+.notes-panel .count { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; font: 600 11px/18px var(--font-body); text-align: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent-dim); vertical-align: 1px; }
+.chev { width: 10px; height: 10px; border-right: 2px solid var(--text-dim); border-bottom: 2px solid var(--text-dim); transform: rotate(45deg); margin: 0 6px 4px 0; transition: transform 0.18s; flex: none; }
+.notes-panel[open] > summary .chev { transform: rotate(-135deg); margin-bottom: -2px; }
+.notes-panel > summary:focus-visible { outline-offset: -2px; }
+.notes-panel[open] > summary { padding-bottom: 4px; }
+.notes-panel .notes { padding-bottom: 10px; }
+
+/* ---------- mes a mes dentro de la evolución ---------- */
+.panel-sep { border-top: 1px solid var(--border-soft); margin: 4px 18px 0; padding-top: 16px; }
+.panel-sep h3 { font-size: 14.5px; }
+.panel-sep .sub { font-size: 11.5px; color: var(--text-faint); margin: 2px 0 0; }
+.monthly { display: grid; grid-template-columns: 1.1fr 1fr; gap: 18px; padding: 8px 18px 18px; align-items: start; }
+.monthly-table { max-height: 300px; overflow: auto; }
+.monthly-table thead th { position: sticky; top: 0; background: var(--surface); }
+@media (max-width: 900px) { .monthly { grid-template-columns: 1fr; } }
