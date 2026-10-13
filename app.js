@@ -29,7 +29,7 @@
     set(k, v) { try { if (v == null) localStorage.removeItem('patrimonio.' + k); else localStorage.setItem('patrimonio.' + k, String(v)); } catch (e) { /* sin almacenamiento */ } },
   };
   const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', range: '1a', revealed: false, dlg: null,
-    hide: store.get('hide') === '1', noRE: false, donut: 'cat', invSort: { key: 'value', dir: -1 },
+    hide: store.get('hide') === '1', hiddenCats: new Set(), notesOpen: store.get('notes') !== '0', donut: 'cat', invSort: { key: 'value', dir: -1 },
     goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 } };
 
   // ---------- avisos ----------
@@ -202,7 +202,7 @@
 
   const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
   const monthLabel = (k) => MES[Number(k.slice(5)) - 1] + (k.slice(5) === '01' ? ' ' + k.slice(2, 4) : '');
-  const ENTITY_COLORS = ['#1f5eff', '#0a2463', '#62b8ff', '#6f7df2', '#a9bfe9', '#3b82f6', '#14308f', '#8ec5ff'];
+  const ENTITY_COLORS = ['#2563eb', '#f59e0b', '#14b8a6', '#8b5cf6', '#ec4899', '#64748b', '#84cc16', '#06b6d4'];
   const RANGES = [['1m', '1M'], ['3m', '3M'], ['6m', '6M'], ['ytd', 'Año'], ['1a', '1A'], ['todo', 'Todo']];
 
   const rangeSeg = () => html`<div class="seg" role="group" aria-label="Periodo del gráfico">${RANGES.map(([k, l]) => html`<button type="button" data-action="range" data-range="${k}" aria-pressed="${state.range === k}">${l}</button>`)}</div>`;
@@ -228,8 +228,8 @@
     const ch = Calc.change(m, 30), yt = A.ytd(m, today), ret = A.returns(m, today), conc = A.concentration(m, today);
     const loans = A.loans(m, today), quotas = loans.reduce((s, l) => s + l.payment * l.share, 0);
     const kd30 = ch ? html`<span class="${changeClass(ch.abs)}">${Calc.fmtSigned(ch.abs)}${ch.pct != null ? html` (${Calc.fmtPct(ch.pct)})` : ''}</span> en 30 días` : 'Variación a 30 días cuando haya un mes de historial';
-    const notesHtml = notes.length ? html`<section class="panel"><div class="panel-head"><div><h2>Avisos</h2><div class="sub">Datos que conviene revisar</div></div></div>
-      <ul class="notes">${notes.map((a) => html`<li class="${a.level}"><button type="button" data-action="alert-go" data-tab="${a.tab}" data-asset="${a.asset || ''}">${a.text}</button></li>`)}</ul></section>` : '';
+    const notesHtml = notes.length ? html`<details class="panel notes-panel" id="notes-panel"${state.notesOpen ? raw(' open') : ''}><summary class="panel-head"><div><h2>Avisos <span class="count">${notes.length}</span></h2><div class="sub">Datos que conviene revisar</div></div><span class="chev" aria-hidden="true"></span></summary>
+      <ul class="notes">${notes.map((a) => html`<li class="${a.level}"><button type="button" data-action="alert-go" data-tab="${a.tab}" data-asset="${a.asset || ''}">${a.text}</button></li>`)}</ul></details>` : '';
 
     const goal = state.goal, eta = goal ? A.goalETA(m, goal) : null;
     const goalHtml = goal ? html`<div class="goal-line"><b class="num">${Calc.fmtEUR(net)}</b><span class="muted">de ${Calc.fmtEUR(goal)}</span></div>
@@ -256,6 +256,11 @@
         <div class="mini"><div class="v num">${pctPlain.format(conc.debtPct)}</div><div class="l">deudas sobre tus activos</div></div></div>` : '';
 
     return html`
+      <section class="panel"><div class="panel-head"><div><h2>Evolución del patrimonio</h2><div class="sub">Pulsa un tipo de la leyenda para quitarlo o ponerlo y ver la evolución conjunta de los demás</div></div>${rangeSeg()}</div>
+        ${n >= 2 ? html`<div class="chart-wrap"><div id="chart-main" class="chart"></div></div>
+          <div class="chart-foot"><div class="legend legend-buttons" id="legend-main"></div></div>` : html`<p class="chart-empty">La gráfica aparece cuando hay datos de dos fechas distintas.</p>`}
+        <div class="panel-sep"><h3>Mes a mes</h3><p class="sub">Cuánto ha cambiado tu patrimonio neto cada mes (incluye aportaciones y mercado)</p></div>
+        <div class="monthly"><div id="monthly-bars" class="chart-wrap" style="padding:0"></div><div class="table-scroll monthly-table" id="monthly-table"></div></div></section>
       <div class="kpis">
         <div class="kpi"><div class="kl">${debt > 0.005 ? 'Patrimonio neto' : 'Patrimonio'}</div><div class="kv num">${Calc.fmtEUR(net)}</div><div class="kd">${kd30}</div></div>
         <div class="kpi" style="--kc:var(--c-efectivo)"><div class="kl">Activos</div><div class="kv num">${Calc.fmtEUR(gross)}</div><div class="kd">${conc ? conc.count + ' productos' : ''}${yt ? html` · <span class="${changeClass(yt.abs)}">${Calc.fmtSigned(yt.abs)}</span> ${yt.partial ? 'desde el inicio' : 'en el año'}` : ''}</div></div>
@@ -264,48 +269,42 @@
         <div class="kpi" style="--kc:var(--c-accion)"><div class="kl">Beneficio de inversiones</div><div class="kv num ${ret.rows.length ? changeClass(ret.gain) : ''}">${ret.rows.length ? Calc.fmtSigned(ret.gain) : '—'}</div><div class="kd">${ret.pct != null ? html`${Calc.fmtPct(ret.pct)} sobre <span class="num">${Calc.fmtEUR(ret.invested)}</span> aportados` : 'Estimado con tus compras'}</div></div>
       </div>
       ${notesHtml}
-      <div class="grid-main">
-        <section class="panel"><div class="panel-head"><div><h2>Evolución del patrimonio</h2><div class="sub">${state.noRE ? 'Sin inmuebles ni hipotecas' : 'Por tipo de producto; las deudas se restan'}</div></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">${rangeSeg()}<div class="seg"><button type="button" data-action="toggle-re" aria-pressed="${state.noRE}">Sin inmuebles</button></div></div></div>
-          ${n >= 2 ? html`<div class="chart-wrap"><div id="chart-main" class="chart"></div></div>
-            <div class="chart-foot"><div class="legend" id="legend-main"></div></div>` : html`<p class="chart-empty">La gráfica aparece cuando hay datos de dos fechas distintas.</p>`}
-        </section>
+      <div class="grid-half">
         <section class="panel"><div class="panel-head"><div><h2>Reparto</h2><div class="sub">Dónde está tu dinero</div></div>
           <div class="seg">${[['cat', 'Tipo'], ['ent', 'Entidad']].map(([k, l]) => html`<button type="button" data-action="donut-mode" data-mode="${k}" aria-pressed="${state.donut === k}">${l}</button>`)}</div></div>
           <div class="panel-body"><div class="donut"><div id="donut-host"></div><div class="donut-center"><div class="big num">${Calc.fmtEUR(gross)}</div><div class="lbl">activos</div></div></div>
           <div class="conc-list" id="donut-list" style="margin-top:14px"></div></div></section>
+        <section class="panel"><div class="panel-head"><div><h2>Composición de la cartera</h2><div class="sub">Concentración, liquidez y endeudamiento</div></div></div><div class="panel-body">${health}
+          <div class="conc-list">${A.positions(m, today).slice(0, 6).map((p) => html`<div class="conc-row"><span class="sw" style="background:var(--c-${p.asset.category})"></span><span class="nm">${p.asset.name}</span>
+            <span class="bar"><i style="width:${(p.value / gross * 100).toFixed(1)}%;background:var(--c-${p.asset.category})"></i></span><span class="pc num">${pctPlain.format(p.value / gross)}</span><span class="am num">${Calc.fmtEUR(p.value)}</span></div>`)}</div></div></section>
       </div>
       <div class="grid-half">
         <section class="panel"><div class="panel-head"><div><h2>Objetivo</h2><div class="sub">Tu meta de patrimonio neto</div></div></div><div class="panel-body">${goalHtml}</div></section>
         <section class="panel"><div class="panel-head"><div><h2>Próximos movimientos</h2><div class="sub">Aportaciones y cuotas de los próximos 45 días</div></div></div>${upHtml}</section>
       </div>
-      <div class="grid-half">
-        <section class="panel"><div class="panel-head"><div><h2>Composición de la cartera</h2><div class="sub">Concentración, liquidez y endeudamiento</div></div></div><div class="panel-body">${health}
-          <div class="conc-list">${A.positions(m, today).slice(0, 6).map((p, i) => html`<div class="conc-row"><span class="sw" style="background:var(--c-${p.asset.category})"></span><span class="nm">${p.asset.name}</span>
-            <span class="bar"><i style="width:${(p.value / gross * 100).toFixed(1)}%;background:var(--c-${p.asset.category})"></i></span><span class="pc num">${pctPlain.format(p.value / gross)}</span><span class="am num">${Calc.fmtEUR(p.value)}</span></div>`)}</div></div></section>
-        <section class="panel"><div class="panel-head"><div><h2>Movimientos en 30 días</h2><div class="sub">Variación del precio de cada producto</div></div></div>${mvHtml}</section>
-      </div>
-      <section class="panel"><div class="panel-head"><div><h2>Mes a mes</h2><div class="sub">Cuánto ha cambiado tu patrimonio neto cada mes (incluye aportaciones y mercado)</div></div></div>
-        <div class="grid-half" style="padding:0 18px 18px"><div id="monthly-bars" class="chart-wrap" style="padding:0"></div><div class="table-scroll" id="monthly-table"></div></div></section>`;
+      <section class="panel"><div class="panel-head"><div><h2>Movimientos en 30 días</h2><div class="sub">Variación del precio de cada producto</div></div></div>${mvHtml}</section>`;
   }
 
   function drawMain() {
     const host = $('#chart-main');
     if (!host) return;
-    const m = state.model, i0 = cutIndex(m.dates), noRE = state.noRE;
+    const m = state.model, i0 = cutIndex(m.dates), hidden = state.hiddenCats;
     const dates = m.dates.slice(i0);
-    const cats = Calc.STACK_ORDER.filter((c) => !(noRE && c === 'inmobiliario'));
-    const series = cats.map((c) => ({ key: c, label: Calc.CATEGORIES[c].label, color: `var(--c-${c})`, values: m.byCat[c].slice(i0) })).filter((s) => s.values.some((v) => v > 0.005));
-    const debt = m.byCat.deuda.slice(i0), gross = m.gross.slice(i0).map((g, i) => g - (noRE ? m.byCat.inmobiliario[i0 + i] : 0)), net = m.net.slice(i0);
-    const hasDebt = !noRE && debt.some((v) => v > 0.005);
+    const all = Calc.STACK_ORDER.map((c) => ({ key: c, label: Calc.CATEGORIES[c].label, color: `var(--c-${c})`, values: m.byCat[c].slice(i0) })).filter((x) => x.values.some((v) => v > 0.005));
+    const series = all.filter((x) => !hidden.has(x.key));
+    const debt = m.byCat.deuda.slice(i0), net = m.net.slice(i0);
+    const gross = m.gross.slice(i0);
+    const filtered = hidden.size > 0;
+    const hasDebt = !filtered && debt.some((v) => v > 0.005);
+    const total = dates.map((_, i) => series.reduce((sum, x) => sum + (x.values[i] || 0), 0));
     Charts.draw(host, {
-      dates, series, stacked: true, yMode: 'zero', fmt: Calc.fmtEUR,
-      ariaLabel: `Evolución del patrimonio entre ${Calc.fmtDate(dates[0])} y ${Calc.fmtDate(dates[dates.length - 1])}. Patrimonio actual: ${Calc.fmtEUR(net[net.length - 1])}.`,
-      showTotal: !hasDebt, totalLabel: noRE ? 'Sin inmuebles' : 'Total', totalValues: noRE ? gross : null,
+      dates, series, stacked: true, yMode: 'zero', fmt: Calc.fmtEUR, tall: true,
+      ariaLabel: `Evolución del patrimonio entre ${Calc.fmtDate(dates[0])} y ${Calc.fmtDate(dates[dates.length - 1])}. ${filtered ? 'Suma de los tipos seleccionados' : 'Patrimonio actual'}: ${Calc.fmtEUR(filtered ? total[total.length - 1] : net[net.length - 1])}.`,
+      showTotal: !hasDebt, totalLabel: filtered ? 'Selección' : 'Total', totalValues: total,
       extraRows: hasDebt ? (i) => [{ label: 'Activos', value: gross[i] }, { label: 'Deudas', value: -debt[i], color: 'var(--c-deuda)' }, { label: 'Patrimonio neto', value: net[i], total: true }] : null,
     });
     const lg = $('#legend-main');
-    if (lg) lg.innerHTML = series.slice().reverse().map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join('');
+    if (lg) lg.innerHTML = all.slice().reverse().map((x) => `<button type="button" class="legend-toggle${hidden.has(x.key) ? ' off' : ''}" data-action="toggle-cat" data-cat="${x.key}" aria-pressed="${!hidden.has(x.key)}"><i style="background:${x.color}"></i>${esc(x.label)}</button>`).join('');
     if (!state.revealed) {
       host.classList.add('reveal');
       host.addEventListener('animationend', () => host.classList.remove('reveal'), { once: true });
@@ -716,7 +715,16 @@
       document.body.classList.toggle('hide-amounts', state.hide); t.setAttribute('aria-pressed', String(state.hide));
     },
     'donut-mode': (t) => { state.donut = t.dataset.mode; renderView(); },
-    'toggle-re': () => { state.noRE = !state.noRE; renderView(); },
+    'toggle-cat': (t) => {
+      const c = t.dataset.cat, h = state.hiddenCats;
+      if (h.has(c)) h.delete(c);
+      else {
+        const visible = Calc.STACK_ORDER.filter((k) => !h.has(k) && state.model.byCat[k].some((v) => v > 0.005));
+        if (visible.length <= 1) return toast('Deja al menos un tipo en el gráfico.', true);
+        h.add(c);
+      }
+      drawMain();
+    },
     'sort-inv': (t) => {
       const k = t.dataset.key;
       state.invSort = { key: k, dir: state.invSort.key === k ? -state.invSort.dir : (k === 'name' ? 1 : -1) };
@@ -858,6 +866,9 @@
     const btn = f.querySelector('button[type=submit]');
     Promise.resolve(forms[f.dataset.form](f, btn)).catch(handleError);
   });
+  document.addEventListener('toggle', (e) => {
+    if (e.target && e.target.id === 'notes-panel') { state.notesOpen = e.target.open; store.set('notes', e.target.open ? '1' : '0'); }
+  }, true);
   document.addEventListener('input', (e) => {
     const t = e.target;
     if (t.dataset && t.dataset.proj) {
