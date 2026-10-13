@@ -236,13 +236,13 @@
     const scale = (hasNeg ? (H - padT - padB) / 2 : (H - padT - padB)) / (maxAbs * 1.1);
     const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': (opts && opts.ariaLabel) || 'Barras', class: 'chart-svg' }, host);
     el('line', { x1: 0, x2: W, y1: zero, y2: zero, class: 'grid' }, svg);
-    const slot = W / n, bw = Math.min(46, slot * 0.62);
+    const slot = W / n, bw = Math.min(64, slot * 0.62);
     items.forEach((it, k) => {
       const h = Math.abs(it.value) * scale, x = k * slot + (slot - bw) / 2;
       const rect = el('rect', { x: x.toFixed(1), width: bw.toFixed(1), y: (it.value >= 0 ? zero - h : zero).toFixed(1), height: Math.max(1, h).toFixed(1), rx: 4, class: 'bar ' + (it.value >= 0 ? 'up' : 'down') }, svg);
       const t = el('title', {}, rect); t.textContent = `${it.label}: ${opts && opts.fmtSigned ? opts.fmtSigned(it.value) : it.value}`;
       const lx = el('text', { x: (x + bw / 2).toFixed(1), y: H - 8, class: 'xlabel', 'text-anchor': 'middle' }, svg); lx.textContent = it.label;
-      if (n <= 8) {
+      if (n <= 14) {
         const vy = it.value >= 0 ? zero - h - 4 : zero + h + 11;
         const vt = el('text', { x: (x + bw / 2).toFixed(1), y: vy.toFixed(1), class: 'barval', 'text-anchor': 'middle' }, svg);
         vt.textContent = Calc.fmtCompactEUR(it.value);
