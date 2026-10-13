@@ -429,3 +429,13 @@ table.heat td.hm:not(.none):hover { outline: 2px solid var(--accent); outline-of
 .cmp-table td.indent { padding-left: 34px; }
 .cmp-table tbody tr.click { cursor: pointer; }
 .panel > .chart-wrap#cmp-bars { padding: 12px 18px 4px; }
+
+/* Filtro de la tabla de inversiones */
+.inv-filter { padding: 4px 18px 10px; display: flex; flex-direction: column; gap: 10px; }
+.inv-filter input[type=search] { max-width: 460px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--border); background: var(--surface); color: var(--text-dim); border-radius: 999px; padding: 4px 12px; font: 500 12.5px var(--font-body); cursor: pointer; min-height: 30px; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+#inv-table-wrap .stat-row { padding-bottom: 12px; }
+#inv-table-wrap .chart-empty { padding: 0 18px 12px; }
