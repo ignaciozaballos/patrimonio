@@ -18,7 +18,7 @@
   }
 
   const pctPlain = new Intl.NumberFormat('es-ES', { style: 'percent', maximumFractionDigits: 0 });
-  const TABS = [['resumen', 'Resumen'], ['inversiones', 'Inversiones'], ['cuentas', 'Cuentas'], ['futuro', 'Futuro'], ['actualizar', 'Actualizar'], ['ajustes', 'Ajustes']];
+  const TABS = [['resumen', 'Resumen'], ['inversiones', 'Inversiones'], ['cuentas', 'Cuentas'], ['comparar', 'Comparar'], ['futuro', 'Futuro'], ['actualizar', 'Actualizar'], ['ajustes', 'Ajustes']];
   const CAT_OPTIONS = [['efectivo', 'Efectivo (cuenta bancaria)'], ['fondo', 'Fondo de inversión'], ['accion', 'Acción'],
     ['plan_pensiones', 'Plan de pensiones'], ['inmobiliario', 'Inmobiliario'], ['deuda', 'Deuda (hipoteca, préstamo)']];
   const UNIT_CATS = ['fondo', 'accion', 'plan_pensiones'];
@@ -30,7 +30,8 @@
   };
   const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', rng: { main: { k: '1a' }, month: { k: '1a' }, inv: { k: '1a' } }, revealed: false, dlg: null,
     hide: store.get('hide') === '1', hiddenCats: new Set(), notesOpen: store.get('notes') !== '0', donut: 'cat', invSort: { key: 'value', dir: -1 },
-    goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 } };
+    goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 },
+    heat: store.get('heat') === 'pct' ? 'pct' : 'eur', cmp: null };
 
   // ---------- avisos ----------
   let toastTimer;
@@ -190,10 +191,11 @@
     if (!view || !state.model) return;
     document.querySelectorAll('.chart').forEach((c) => Charts.destroy(c));
     updateHeader();
-    const fn = { resumen: renderResumen, inversiones: renderInversiones, cuentas: renderCuentas, futuro: renderFuturo, actualizar: renderActualizar, ajustes: renderAjustes }[state.tab];
+    const fn = { resumen: renderResumen, inversiones: renderInversiones, cuentas: renderCuentas, comparar: renderComparar, futuro: renderFuturo, actualizar: renderActualizar, ajustes: renderAjustes }[state.tab];
     view.innerHTML = fn().s;
     if (state.tab === 'resumen') { drawMain(); drawDonut(); drawMonthly(); }
     if (state.tab === 'inversiones') drawInvest();
+    if (state.tab === 'comparar') drawCompare();
     if (state.tab === 'futuro') drawProjection();
   }
 
@@ -288,6 +290,7 @@
         <div class="stat-row" id="month-stats"></div>
         <div class="chart-wrap" id="monthly-bars"></div>
         <div class="table-scroll monthly-table" id="monthly-table"></div></section>
+      ${heatPanel()}
       ${notesHtml}
       <div class="grid-half">
         <section class="panel"><div class="panel-head"><div><h2>Reparto</h2><div class="sub">Dónde está tu dinero</div></div>
@@ -370,15 +373,46 @@
       `<tr><td>${esc(monthLabel(r.month))}</td><td class="r num">${esc(Calc.fmtEUR(r.net))}</td><td class="r num ${sgn(r.delta)}">${esc(Calc.fmtSigned(r.delta))}</td><td class="r num ${r.pct == null ? '' : sgn(r.pct)}">${r.pct == null ? '—' : esc(Calc.fmtPct(r.pct))}</td><td class="r num">${esc(Calc.fmtEUR(r.gross))}</td><td class="r num">${r.debt > 0.005 ? '−' : ''}${esc(Calc.fmtEUR(r.debt))}</td></tr>`).join('')}</tbody></table>`;
   }
 
+  // ---------- mapa de meses ----------
+  const compactEUR = (v) => {
+    if (v == null) return '';
+    const a = Math.abs(v), sg = v > 0.5 ? '+' : v < -0.5 ? '−' : '';
+    if (a >= 1000) return sg + (a / 1000).toLocaleString('es-ES', { maximumFractionDigits: a >= 10000 ? 0 : 1 }) + 'k';
+    return sg + Math.round(a).toLocaleString('es-ES');
+  };
+  function heatPanel() {
+    const hm = A.heatmap(state.model);
+    if (!hm || !hm.years.some((y) => y.cells.some((c) => c && c.delta != null))) return html``;
+    const mode = state.heat, scale = mode === 'pct' ? hm.scalePct : hm.scaleEur;
+    const tint = (v) => {
+      if (v == null || !(scale > 0)) return '';
+      const k = Math.min(1, Math.abs(v) / scale), a = Math.round(8 + k * 47);
+      return `background:color-mix(in srgb, var(${v >= 0 ? '--positive' : '--negative'}) ${a}%, transparent)`;
+    };
+    const show = (c) => (mode === 'pct' ? (c.pct == null ? '' : Calc.fmtPct(c.pct)) : compactEUR(c.delta));
+    const cell = (c, y, i) => {
+      if (!c) return html`<td class="hm none"></td>`;
+      const v = mode === 'pct' ? c.pct : c.delta;
+      if (v == null) return html`<td class="hm none" title="${MES[i]} ${y.year}: primer mes con datos">·</td>`;
+      return html`<td class="hm num" style="${tint(v)}" title="${MES[i]} ${y.year}: ${Calc.fmtSigned(c.delta)}${c.pct != null ? ' (' + Calc.fmtPct(c.pct) + ')' : ''}">${show(c)}</td>`;
+    };
+    const totalCell = (y) => y.total == null ? html`<td class="hm none tot">—</td>`
+      : html`<td class="hm num tot" style="${tint(mode === 'pct' ? y.totalPct : y.total)}" title="${y.year}${y.partial ? ' (desde el primer dato)' : ''}: ${Calc.fmtSigned(y.total)}${y.totalPct != null ? ' (' + Calc.fmtPct(y.totalPct) + ')' : ''}">${mode === 'pct' ? (y.totalPct == null ? '—' : Calc.fmtPct(y.totalPct)) : compactEUR(y.total)}</td>`;
+    return html`<section class="panel" id="heat-panel"><div class="panel-head"><div><h2>Mapa de meses</h2><div class="sub">Cambio del patrimonio neto en cada mes: verde si sube, rojo si baja. Pasa el cursor por un mes para ver el detalle.</div></div>
+        <div class="seg">${[['eur', '€'], ['pct', '%']].map(([k, l]) => html`<button type="button" data-action="heat-mode" data-mode="${k}" aria-pressed="${mode === k}">${l}</button>`)}</div></div>
+      <div class="table-scroll heat-wrap"><table class="heat"><thead><tr><th>Año</th>${MES.map((x) => html`<th>${x}</th>`)}<th class="tot">Total</th></tr></thead>
+        <tbody>${hm.years.slice().reverse().map((y) => html`<tr><th scope="row">${y.year}</th>${y.cells.map((c, i) => cell(c, y, i))}${totalCell(y)}</tr>`)}</tbody></table></div></section>`;
+  }
+
   // ---------- inversiones ----------
-  const INV_COLS = [['name', 'Producto', false], ['value', 'Valor', true], ['weight', 'Peso', true], ['invested', 'Aportado', true], ['gain', 'Beneficio', true], ['pct', 'Rentab.', true], ['m30', '30 días', true]];
+  const INV_COLS = [['name', 'Producto', false], ['value', 'Valor', true], ['weight', 'Peso', true], ['invested', 'Aportado', true], ['gain', 'Beneficio', true], ['pct', 'Rentab.', true], ['annual', 'Anualizada', true], ['m30', '30 días', true]];
   function renderInversiones() {
     const m = state.model, today = Calc.todayStr();
     const list = m.assets.filter((a) => a.active && a.valuation === 'units');
     if (!list.length) return emptyState('No hay fondos, acciones ni planes', 'Añádelos en Ajustes con su ISIN y sus participaciones.', [['ajustes', 'Ir a Ajustes']]);
     const ret = A.returns(m, today);
     const total = ret.value || 1;
-    const rows = ret.rows.map((r) => ({ r, name: r.asset.name, value: r.value, weight: r.value / total, invested: r.invested, gain: r.gain, pct: r.pct, m30: Calc.priceChange(r.asset, m.idx, 30) }));
+    const rows = ret.rows.map((r) => ({ r, name: r.asset.name, value: r.value, weight: r.value / total, invested: r.invested, gain: r.gain, pct: r.pct, annual: r.annual, m30: Calc.priceChange(r.asset, m.idx, 30) }));
     const { key, dir } = state.invSort;
     rows.sort((a, b) => key === 'name' ? dir * a.name.localeCompare(b.name, 'es') : dir * ((a[key] == null ? -Infinity : a[key]) - (b[key] == null ? -Infinity : b[key])));
     const missing = list.filter((a) => !ret.rows.some((r) => r.asset.id === a.id));
@@ -388,6 +422,7 @@
         <div class="kpi"><div class="kl">Valor de tus inversiones</div><div class="kv num">${Calc.fmtEUR(ret.value)}</div><div class="kd">${ret.rows.length} productos</div></div>
         <div class="kpi" style="--kc:var(--c-efectivo)"><div class="kl">Aportado</div><div class="kv num">${Calc.fmtEUR(ret.invested)}</div><div class="kd">Compras a precio del día</div></div>
         <div class="kpi" style="--kc:${ret.gain >= 0 ? 'var(--positive)' : 'var(--negative)'}"><div class="kl">Beneficio</div><div class="kv num ${changeClass(ret.gain)}">${Calc.fmtSigned(ret.gain)}</div><div class="kd">${ret.pct != null ? Calc.fmtPct(ret.pct) : ''}</div></div>
+        <div class="kpi" style="--kc:var(--c-fondo)"><div class="kl">Rentabilidad anualizada</div><div class="kv num ${ret.annual == null ? '' : changeClass(ret.annual)}">${ret.annual == null ? '—' : Calc.fmtPct(ret.annual)}</div><div class="kd">${ret.annual == null ? 'Hacen falta 6 meses de inversión' : 'Al año, según cuándo aportaste'}</div></div>
         <div class="kpi" style="--kc:var(--c-plan_pensiones)"><div class="kl">Aportación mensual</div><div class="kv num">${contrib > 0 ? Calc.fmtEUR(contrib) : '—'}</div><div class="kd">${contrib > 0 ? Calc.fmtEUR(contrib * 12) + ' al año' : 'Sin aportaciones automáticas'}</div></div>
       </div>
       <section class="panel"><div class="panel-head"><div><h2>Valor frente a lo aportado</h2><div class="sub">La distancia entre las dos líneas es tu beneficio</div></div>${rangeControl('inv')}</div>
@@ -399,11 +434,12 @@
           <td><span class="name-cell"><span class="sw" style="background:var(--c-${x.r.asset.category})"></span><span>${x.r.asset.name}<span class="sub">${[x.r.asset.entity, Calc.CATEGORIES[x.r.asset.category].label].filter(Boolean).join(' · ')}${x.r.asset.plan ? ' · aporta ' + Calc.fmtEUR(Number(x.r.asset.plan.amount)) + '/mes' : ''}</span></span></span></td>
           <td class="r num">${Calc.fmtEUR(x.value)}</td><td class="r num">${pctPlain.format(x.weight)}</td><td class="r num">${Calc.fmtEUR(x.invested)}</td>
           <td class="r num ${changeClass(x.gain)}">${Calc.fmtSigned(x.gain)}</td><td class="r num ${x.pct == null ? '' : changeClass(x.pct)}">${x.pct == null ? '—' : Calc.fmtPct(x.pct)}</td>
+          <td class="r num ${x.annual == null ? '' : changeClass(x.annual)}" title="${x.annual == null ? 'Con menos de 6 meses no se anualiza' : 'Rentabilidad anual equivalente'}">${x.annual == null ? '—' : Calc.fmtPct(x.annual)}</td>
           <td class="r num ${x.m30 == null ? '' : changeClass(x.m30)}">${x.m30 == null ? '—' : Calc.fmtPct(x.m30)}</td>
           <td>${x.r.info.stale ? html`<span class="pill warn">del ${Calc.fmtDate(x.r.info.priceDate, false)}</span>` : html`<span class="pill on">al día</span>`}</td></tr>`)}</tbody>
-        <tfoot><tr><td>Total</td><td class="r num">${Calc.fmtEUR(ret.value)}</td><td class="r num">100 %</td><td class="r num">${Calc.fmtEUR(ret.invested)}</td><td class="r num ${changeClass(ret.gain)}">${Calc.fmtSigned(ret.gain)}</td><td class="r num">${ret.pct != null ? Calc.fmtPct(ret.pct) : '—'}</td><td></td><td></td></tr></tfoot></table></div>
+        <tfoot><tr><td>Total</td><td class="r num">${Calc.fmtEUR(ret.value)}</td><td class="r num">100 %</td><td class="r num">${Calc.fmtEUR(ret.invested)}</td><td class="r num ${changeClass(ret.gain)}">${Calc.fmtSigned(ret.gain)}</td><td class="r num">${ret.pct != null ? Calc.fmtPct(ret.pct) : '—'}</td><td class="r num ${ret.annual == null ? '' : changeClass(ret.annual)}">${ret.annual == null ? '—' : Calc.fmtPct(ret.annual)}</td><td></td><td></td></tr></tfoot></table></div>
         ${missing.length ? html`<p class="small muted" style="padding:10px 18px 0">Sin precio o participaciones todavía: ${missing.map((a) => a.name).join(', ')}.</p>` : ''}
-        <p class="small muted" style="padding:10px 18px 16px">«Aportado» suma cada compra (participaciones nuevas × precio de ese día, ya con tu parte). Es una estimación: si los precios históricos son aproximados, el beneficio también lo es.</p></section>`;
+        <p class="small muted" style="padding:10px 18px 16px">«Aportado» suma cada compra (participaciones nuevas × precio de ese día, ya con tu parte). Es una estimación: si los precios históricos son aproximados, el beneficio también lo es. «Anualizada» es la rentabilidad por año que equivale a tus aportaciones según el día en que las hiciste; no se calcula con menos de 6 meses.</p></section>`;
   }
 
   function drawInvest() {
@@ -416,6 +452,56 @@
     Charts.draw(host, { dates, series: [{ label: 'Valor', color: 'var(--accent)', values: value }], lines: [{ label: 'Capital aportado', color: 'var(--text-dim)', values: invested }],
       diffRow: 'Beneficio', fmtSigned: Calc.fmtSigned, stacked: false, yMode: 'fit', fmt: Calc.fmtEUR,
       ariaLabel: `Valor de tus inversiones frente a lo aportado, de ${Calc.fmtDate(dates[0])} a ${Calc.fmtDate(dates[dates.length - 1])}.` });
+  }
+
+  // ---------- comparar dos fechas ----------
+  const signedEUR = (v) => (v < -0.5 ? '−' : '') + Calc.fmtEUR(Math.abs(v));
+  function cmpPresets() {
+    const m = state.model, today = Calc.todayStr(), first = m.dates[0];
+    const back = (d) => { const x = Calc.addDays(today, -d); return first && x < first ? first : x; };
+    return [['1m', '1M', back(30)], ['3m', '3M', back(91)], ['6m', '6M', back(182)], ['ytd', 'Año', (Number(today.slice(0, 4)) - 1) + '-12-31'], ['1a', '1A', back(365)], ['todo', 'Todo', first]];
+  }
+  function cmpState() {
+    if (!state.cmp) {
+      const today = Calc.todayStr();
+      state.cmp = { from: cmpPresets().find((p) => p[0] === '1a')[2], to: today };
+    }
+    return state.cmp;
+  }
+  function renderComparar() {
+    const m = state.model;
+    if (!m.dates.length) return emptyState('Todavía no hay datos', 'Cuando haya valores podrás comparar dos fechas.', [['ajustes', 'Ir a Ajustes']]);
+    const c0 = cmpState(), c = A.compare(m, c0.from, c0.to);
+    const box = (cls, title, big, small) => html`<div class="stat"><div class="kl">${title}</div><div class="sv num ${cls}">${big}</div><div class="kd">${small}</div></div>`;
+    const sgn = (v) => (v >= 0 ? 'pos' : 'neg');
+    const dLbl = (v) => (v == null ? '' : Calc.fmtSigned(v));
+    const presets = cmpPresets();
+    const body = c.rows.length ? html`
+      <div class="stat-row four">
+        ${box(sgn(c.net.delta), 'Patrimonio neto', dLbl(c.net.delta), html`${signedEUR(c.net.a)} → ${signedEUR(c.net.b)}${c.net.pct != null ? ' · ' + Calc.fmtPct(c.net.pct) : ''}`)}
+        ${box(sgn(c.assets.b - c.assets.a), 'Activos', dLbl(c.assets.b - c.assets.a), html`${signedEUR(c.assets.a)} → ${signedEUR(c.assets.b)}`)}
+        ${box(sgn(c.debt.a - c.debt.b), 'Deudas', Math.abs(c.debt.a - c.debt.b) < 0.5 ? '0 €' : c.debt.a > c.debt.b ? html`−${Calc.fmtEUR(c.debt.a - c.debt.b)}` : html`+${Calc.fmtEUR(c.debt.b - c.debt.a)}`, html`${Calc.fmtEUR(c.debt.a)} → ${Calc.fmtEUR(c.debt.b)}`)}
+        ${box(sgn(c.invest.market), 'Mercado en inversiones', dLbl(c.invest.market), html`${dLbl(c.invest.delta)} en total, de los que aportaste ${Calc.fmtEUR(c.invest.contributed)}`)}
+      </div>
+      <div class="chart-wrap" id="cmp-bars"></div>
+      <div class="table-scroll cmp-table"><table><thead><tr><th>Producto</th><th class="r">${Calc.fmtDate(c.from)}</th><th class="r">${Calc.fmtDate(c.to)}</th><th class="r">Cambio</th><th class="r">%</th></tr></thead>
+        <tbody>${c.cats.map((g) => html`<tr class="grp"><td><span class="name-cell"><span class="sw" style="background:var(--c-${g.cat})"></span>${Calc.CATEGORIES[g.cat].label}</span></td>
+            <td class="r num">${signedEUR(g.a)}</td><td class="r num">${signedEUR(g.b)}</td><td class="r num ${sgn(g.delta)}">${Calc.fmtSigned(g.delta)}</td><td class="r num ${g.pct == null ? '' : sgn(g.pct)}">${g.pct == null ? '—' : Calc.fmtPct(g.pct)}</td></tr>
+          ${g.rows.map((r) => html`<tr class="click" data-action="open-asset" data-id="${r.asset.id}"><td class="indent">${r.asset.name}${r.isNew ? html` <span class="pill">nuevo</span>` : r.gone ? html` <span class="pill">sin valor</span>` : ''}</td>
+            <td class="r num">${r.isNew ? '—' : signedEUR(r.a)}</td><td class="r num">${r.gone ? '—' : signedEUR(r.b)}</td><td class="r num ${sgn(r.delta)}">${Calc.fmtSigned(r.delta)}</td><td class="r num ${r.pct == null ? '' : sgn(r.pct)}">${r.pct == null ? '—' : Calc.fmtPct(r.pct)}</td></tr>`)}`)}</tbody>
+        <tfoot><tr><td>Patrimonio neto</td><td class="r num">${signedEUR(c.net.a)}</td><td class="r num">${signedEUR(c.net.b)}</td><td class="r num ${sgn(c.net.delta)}">${Calc.fmtSigned(c.net.delta)}</td><td class="r num">${c.net.pct == null ? '—' : Calc.fmtPct(c.net.pct)}</td></tr></tfoot></table></div>
+      ${c.noDataBefore ? html`<p class="small muted" style="padding:0 18px 16px">Antes del ${Calc.fmtDate(c.noDataBefore)} no hay datos: lo que no existía entonces aparece como «nuevo».</p>` : ''}`
+      : html`<p class="chart-empty">No hay valores en ninguna de las dos fechas.</p>`;
+    return html`<section class="panel"><div class="panel-head"><div><h2>Comparar dos fechas</h2><div class="sub">Elige un día de partida y otro de llegada para ver qué ha subido, qué ha bajado y cuánto ha puesto el mercado</div></div>
+        <div class="range-ctl"><div class="seg" role="group" aria-label="Atajos">${presets.map(([k, l, from]) => html`<button type="button" data-action="cmp-preset" data-from="${from}" aria-pressed="${c0.from === from && c0.to === Calc.todayStr()}">${l}</button>`)}</div>
+          <div class="range-dates"><label>Desde <input type="date" data-cmp="from" value="${c0.from}" max="${c0.to}"></label><label>Hasta <input type="date" data-cmp="to" value="${c0.to}" min="${c0.from}"></label></div></div></div>
+      ${body}</section>`;
+  }
+  function drawCompare() {
+    const host = $('#cmp-bars');
+    if (!host) return;
+    const c0 = cmpState(), c = A.compare(state.model, c0.from, c0.to);
+    Charts.bars(host, c.cats.map((g) => ({ label: Calc.CATEGORIES[g.cat].label, value: g.delta })), { fmtSigned: Calc.fmtSigned, ariaLabel: 'Cambio por tipo de producto entre las dos fechas' });
   }
 
   // ---------- cuentas e inmuebles ----------
@@ -749,6 +835,8 @@
       state.hide = !state.hide; store.set('hide', state.hide ? '1' : null);
       document.body.classList.toggle('hide-amounts', state.hide); t.setAttribute('aria-pressed', String(state.hide));
     },
+    'heat-mode': (t) => { state.heat = t.dataset.mode === 'pct' ? 'pct' : 'eur'; store.set('heat', state.heat); renderView(); },
+    'cmp-preset': (t) => { state.cmp = { from: t.dataset.from, to: Calc.todayStr() }; renderView(); },
     'donut-mode': (t) => { state.donut = t.dataset.mode; renderView(); },
     'toggle-cat': (t) => {
       const c = t.dataset.cat, h = state.hiddenCats;
@@ -918,6 +1006,13 @@
   });
   document.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.matches && t.matches('input[data-cmp]')) {
+      const c = cmpState();
+      if (t.value) c[t.dataset.cmp] = t.value;
+      if (c.from > c.to) { const x = c.from; c.from = c.to; c.to = x; }
+      renderView();
+      return;
+    }
     if (t.matches && t.matches('input[data-rng-date]')) {
       const id = t.dataset.rngDate, r = state.rng[id];
       r[t.dataset.edge] = t.value || undefined;
