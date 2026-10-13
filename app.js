@@ -442,6 +442,13 @@
           <textarea id="ea-s" name="sources" spellcheck="false" placeholder='${EXAMPLE_SOURCES}'>${a && a.sources && a.sources.length ? JSON.stringify(a.sources, null, 1) : ''}</textarea>
           <p class="field-hint">Lista en formato JSON, de la preferida a la de reserva. Tipos: yahoo, ft, quefondos, finect, url_regex. Déjalo vacío si pondrás el precio a mano.</p>
         </div>
+        <div data-units-only${isUnits ? '' : raw(' hidden')}>
+          <h4>Aportación mensual automática (opcional)</h4>
+          <p class="field-hint">Si suscribes un importe fijo cada mes, la web suma sola las participaciones comprando a ese precio, sin que las anotes a mano. Déjalo vacío si no aportas de forma periódica.</p>
+          <div class="grid2">
+            <div><label for="ea-pa">Importe mensual (€)</label><input id="ea-pa" name="plan_amount" inputmode="decimal" data-amount="2" value="${a && a.plan && a.plan.amount != null ? Calc.fmtNum(Number(a.plan.amount), 2) : ''}"></div>
+            <div><label for="ea-pd">Día del mes</label><input id="ea-pd" name="plan_day" inputmode="numeric" value="${a && a.plan && a.plan.day ? a.plan.day : ''}"></div></div>
+        </div>
         <div data-loan-only${cat === 'deuda' ? '' : raw(' hidden')}>
           <h4>Amortización automática (opcional)</h4>
           <p class="field-hint">Si pagas una cuota fija cada mes, la web calcula sola cómo baja el capital pendiente, sin que lo anotes a mano. Anota una vez el capital pendiente que te da el banco (en Actualizar) y rellena esto. Cuando el banco te dé un dato nuevo, anótalo y se recalcula desde ahí. Déjalo vacío si no quieres automatizarla.</p>
@@ -493,7 +500,14 @@
       if (!(day >= 1 && day <= 31)) return toast('El día de cobro debe estar entre 1 y 31.', true);
       loan = { payment, rate, day };
     }
-    const row = { name, share: Math.round(pct * 100) / 10000, loan, entity: (fd.get('entity') || '').trim() || null, category, valuation,
+    let plan = null;
+    if (valuation === 'units' && ((fd.get('plan_amount') || '').trim() || (fd.get('plan_day') || '').trim())) {
+      const amount = num(fd.get('plan_amount')), day = parseInt(fd.get('plan_day'), 10);
+      if (amount == null || !(amount > 0)) return toast('Escribe el importe de la aportación mensual.', true);
+      if (!(day >= 1 && day <= 31)) return toast('El día de la aportación debe estar entre 1 y 31.', true);
+      plan = { amount, day };
+    }
+    const row = { name, share: Math.round(pct * 100) / 10000, loan, plan, entity: (fd.get('entity') || '').trim() || null, category, valuation,
       isin: valuation === 'units' ? ((fd.get('isin') || '').trim().toUpperCase() || null) : null,
       sources, sort: Number.isFinite(sort) ? sort : 100 };
     await run(btn, async () => {
