@@ -407,3 +407,25 @@ footer.foot { max-width: 1280px; margin: 0 auto; padding: 0 var(--gutter) 40px; 
 @media (max-width: 760px) { .stat-row { grid-template-columns: 1fr; } }
 #month-panel .chart-wrap { padding: 8px 18px 4px; }
 #month-panel .monthly-table { padding: 0 18px 18px; max-height: 340px; }
+
+/* Mapa de meses */
+.heat-wrap { padding: 0 18px 18px; }
+table.heat { border-collapse: separate; border-spacing: 3px; width: 100%; min-width: 640px; table-layout: fixed; }
+table.heat th { font-size: 11.5px; font-weight: 500; color: var(--text-faint); text-align: center; padding: 2px 0 4px; background: none; border: 0; text-transform: none; letter-spacing: 0; position: static; }
+table.heat tbody th { text-align: left; color: var(--text-dim); font-weight: 600; padding-right: 6px; width: 52px; }
+table.heat th.tot, table.heat td.tot { width: 76px; }
+table.heat td.hm { height: 38px; text-align: center; font-size: 12px; border-radius: 6px; padding: 0 2px; border: 0; background: var(--surface-alt); color: var(--text); white-space: nowrap; }
+table.heat td.hm.none { background: transparent; color: var(--text-faint); }
+table.heat td.hm.tot { font-weight: 600; box-shadow: inset 0 0 0 1px var(--border); }
+table.heat td.hm:not(.none):hover { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* Comparar fechas */
+.stat-row.four { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 960px) { .stat-row.four { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .stat-row.four { grid-template-columns: 1fr; } }
+.stat .sv.pos { color: var(--positive); } .stat .sv.neg { color: var(--negative); }
+#view .cmp-table { padding: 0 18px 18px; }
+.cmp-table tr.grp td { background: var(--surface-alt); font-weight: 600; }
+.cmp-table td.indent { padding-left: 34px; }
+.cmp-table tbody tr.click { cursor: pointer; }
+.panel > .chart-wrap#cmp-bars { padding: 12px 18px 4px; }
