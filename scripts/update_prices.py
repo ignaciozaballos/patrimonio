@@ -293,11 +293,24 @@ def src_quefondos(cfg: dict) -> Quote:
 def parse_finect(text: str) -> Quote:
     m = (re.search(r"(\d[\d.]*,\d+)\s*Fecha de valor liquidativo:?\s*", text)
          or re.search(r"(\d[\d.]*,\d+)\s*€[^\d]{0,120}?Fecha de valor liquidativo:?\s*", text))
-    if not m:
-        raise SourceError("finect: no encuentro el valor liquidativo")
-    price = _check_price(parse_number(m.group(1), ","), "finect")
-    dm = re.match(DATE_PATTERN, text[m.end(): m.end() + 40])
-    return Quote(price, parse_date(dm.group(1)) if dm else None, "finect")
+    if m:
+        price = _check_price(parse_number(m.group(1), ","), "finect")
+        dm = re.match(DATE_PATTERN, text[m.end(): m.end() + 40])
+        return Quote(price, parse_date(dm.group(1)) if dm else None, "finect")
+    # Planes de pensiones: "13,25€ Datos a 20/09/2026" (cabecera de la ficha, sin la etiqueta de VL)
+    m = re.search(r"(\d[\d.]*,\d+)\s*€\s*Datos a\s*" + DATE_PATTERN, text)
+    if m:
+        return Quote(_check_price(parse_number(m.group(1), ","), "finect"), parse_date(m.group(2)), "finect")
+    # Planes de pensiones: "Valor liquidativo 12,3456 € ... 10/10/2026" (el número va después de la etiqueta)
+    m = re.search(r"[Vv]alor liquidativo:?\s*(?:\(?[^\d\n]{0,40}\)?\s*)?(\d[\d.]*,\d+)\s*€?"
+                  r"(?:[^\d]{0,60}?" + DATE_PATTERN + ")?", text)
+    if m:
+        price = _check_price(parse_number(m.group(1), ","), "finect")
+        dm = re.search(DATE_PATTERN, text[m.end(1): m.end(1) + 120])
+        return Quote(price, parse_date(dm.group(1)) if dm else None, "finect")
+    i = text.lower().find("liquidativo")
+    snippet = re.sub(r"\s+", " ", text[max(0, i - 60): i + 200]) if i >= 0 else "(la página no menciona 'liquidativo')"
+    raise SourceError(f"finect: no encuentro el valor liquidativo. Texto cercano: {snippet}")
 
 
 def src_finect(cfg: dict) -> Quote:
