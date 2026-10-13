@@ -50,6 +50,23 @@
     }
     return out;
   }
+  /** Rentabilidad anual equivalente (TIR con fechas): el tipo anual con el que tus aportaciones, capitalizadas, igualan el valor actual. */
+  function xirr(fl, endValue, endDate) {
+    const f = (fl || []).filter((x) => Math.abs(x.amount) > 1e-9);
+    if (!f.length || !(endValue > 0)) return null;
+    const t = f.map((x) => ({ a: x.amount, y: Calc.daysBetween(x.date, endDate) / 365 }));
+    const fv = (r) => t.reduce((s, x) => s + x.a * Math.pow(1 + r, x.y), 0) - endValue;
+    let lo = -0.99, hi = 10;
+    const flo = fv(lo), fhi = fv(hi);
+    if (!(flo * fhi < 0)) return null;
+    for (let i = 0; i < 200; i++) {
+      const mid = (lo + hi) / 2;
+      if (fv(mid) * flo > 0) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+  /** Con menos de este tiempo de inversión no se anualiza (daría cifras engañosas). */
+  const MIN_ANNUAL_DAYS = 180;
   function returns(model, today) {
     const rows = [];
     for (const a of active(model)) {
@@ -59,11 +76,16 @@
       const fl = flows(a, model.idx);
       const invested = fl.reduce((s, f) => s + f.amount, 0);
       const hs = model.idx.holdings.get(a.id) || [];
-      rows.push({ asset: a, value: info.value, invested, gain: info.value - invested,
+      const days = fl.length ? Calc.daysBetween(fl[0].date, today) : 0;
+      rows.push({ asset: a, value: info.value, invested, gain: info.value - invested, flows: fl, days,
+        annual: days >= MIN_ANNUAL_DAYS ? xirr(fl, info.value, today) : null,
         pct: invested > 0.5 ? info.value / invested - 1 : null, since: hs.length ? hs[0].date : null, info });
     }
     const value = rows.reduce((s, r) => s + r.value, 0), invested = rows.reduce((s, r) => s + r.invested, 0);
-    return { rows, value, invested, gain: value - invested, pct: invested > 0.5 ? value / invested - 1 : null };
+    const allFlows = rows.flatMap((r) => r.flows).sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+    const days = allFlows.length ? Calc.daysBetween(allFlows[0].date, today) : 0;
+    return { rows, value, invested, gain: value - invested, pct: invested > 0.5 ? value / invested - 1 : null, days,
+      annual: days >= MIN_ANNUAL_DAYS ? xirr(allFlows, value, today) : null };
   }
   /** Capital aportado acumulado a cada fecha del modelo (solo productos con participaciones). */
   function investedSeries(model) {
@@ -103,6 +125,67 @@
       avgMonthly: generated / months, avgPct: start > 0 && end > 0 && months > 0 ? Math.pow(end / start, 1 / months) - 1 : null,
       debtStart: model.byCat.deuda[i0], debtEnd: model.byCat.deuda[i1], debtReduction: model.byCat.deuda[i0] - model.byCat.deuda[i1], i0, i1 };
   }
+  /** Cuadrícula año × mes con la variación del patrimonio neto de cada mes y el total del año. */
+  function heatmap(model) {
+    const rows = monthly(model);
+    if (!rows.length) return null;
+    const byYear = new Map();
+    for (const r of rows) {
+      const y = Number(r.month.slice(0, 4)), m = Number(r.month.slice(5, 7)) - 1;
+      if (!byYear.has(y)) byYear.set(y, { year: y, cells: Array(12).fill(null), lastNet: null });
+      const e = byYear.get(y);
+      e.cells[m] = { delta: r.delta, pct: r.pct, net: r.net, month: r.month };
+      e.lastNet = r.net;
+    }
+    const years = [...byYear.values()].sort((a, b) => a.year - b.year);
+    years.forEach((e, k) => {
+      const prev = k > 0 ? years[k - 1].lastNet : null;
+      const first = e.cells.find(Boolean);
+      const base = prev != null ? prev : first ? first.net : null;
+      e.partial = prev == null;
+      e.total = base != null && !(e.partial && e.cells.filter(Boolean).length < 2) ? e.lastNet - base : null;
+      e.totalPct = e.total != null && base > 0 ? e.lastNet / base - 1 : null;
+    });
+    const scale = (vals) => {
+      const a = vals.filter((v) => v != null).map(Math.abs).sort((x, y) => x - y);
+      if (!a.length) return 0;
+      return a[Math.min(a.length - 1, Math.floor(a.length * 0.9))] || a[a.length - 1];
+    };
+    const cells = years.flatMap((e) => e.cells.filter(Boolean));
+    return { years, scaleEur: scale(cells.map((c) => c.delta)), scalePct: scale(cells.map((c) => c.pct)) };
+  }
+
+  /** Foto del patrimonio en dos fechas: qué producto ha subido o bajado y cuánto (las deudas restan). */
+  function compare(model, from, to) {
+    if (from > to) { const x = from; from = to; to = x; }
+    const first = model.dates.length ? model.dates[0] : null;
+    const rows = [];
+    for (const a of model.assets) {
+      if (!a.active) continue;
+      const sign = a.category === 'deuda' ? -1 : 1;
+      const va = Calc.valueAt(a, model.idx, from), vb = Calc.valueAt(a, model.idx, to);
+      const sa = (va || 0) * sign, sb = (vb || 0) * sign;
+      if (Math.abs(sa) < 0.005 && Math.abs(sb) < 0.005) continue;
+      let contributed = 0;
+      if (UNIT_CATS.includes(a.category)) for (const f of flows(a, model.idx)) if (f.date > from && f.date <= to) contributed += f.amount;
+      rows.push({ asset: a, a: sa, b: sb, delta: sb - sa, pct: Math.abs(sa) > 0.5 ? (sb - sa) / Math.abs(sa) : null, isNew: Math.abs(sa) < 0.005, gone: Math.abs(sb) < 0.005, contributed });
+    }
+    const cats = ['efectivo', 'fondo', 'accion', 'plan_pensiones', 'inmobiliario', 'deuda'].map((c) => {
+      const rs = rows.filter((r) => r.asset.category === c);
+      const a = rs.reduce((s, r) => s + r.a, 0), b = rs.reduce((s, r) => s + r.b, 0);
+      return { cat: c, rows: rs, a, b, delta: b - a, pct: Math.abs(a) > 0.5 ? (b - a) / Math.abs(a) : null };
+    }).filter((g) => g.rows.length);
+    const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
+    const netA = sum((r) => r.a), netB = sum((r) => r.b);
+    const invRows = rows.filter((r) => UNIT_CATS.includes(r.asset.category));
+    const invDelta = invRows.reduce((s, r) => s + r.delta, 0), contributed = invRows.reduce((s, r) => s + r.contributed, 0);
+    return { from, to, noDataBefore: first && from < first ? first : null, rows, cats,
+      net: { a: netA, b: netB, delta: netB - netA, pct: netA > 0.5 ? (netB - netA) / netA : null },
+      assets: { a: sum((r) => (r.asset.category === 'deuda' ? 0 : r.a)), b: sum((r) => (r.asset.category === 'deuda' ? 0 : r.b)) },
+      debt: { a: -sum((r) => (r.asset.category === 'deuda' ? r.a : 0)), b: -sum((r) => (r.asset.category === 'deuda' ? r.b : 0)) },
+      invest: { delta: invDelta, contributed, market: invDelta - contributed } };
+  }
+
   function ytd(model, today) {
     const n = model.dates.length;
     if (n < 2) return null;
@@ -227,6 +310,6 @@
     return [head.join(';'), ...rows].join('\n');
   }
 
-  return { UNIT_CATS, INVEST_CATS, LIQUID_CATS, addMonths, nextOccurrence, flows, returns, investedSeries, investValueSeries, monthly, periodStats, ytd,
+  return { UNIT_CATS, INVEST_CATS, LIQUID_CATS, addMonths, nextOccurrence, flows, returns, xirr, MIN_ANNUAL_DAYS, heatmap, compare, investedSeries, investValueSeries, monthly, periodStats, ytd,
     loanInfo, loans, upcoming, monthlyContributions, project, positions, byEntity, concentration, movers, goalETA, evolutionCSV };
 });
