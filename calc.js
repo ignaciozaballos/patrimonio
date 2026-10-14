@@ -12,11 +12,12 @@
     accion: { label: 'Acciones' },
     plan_pensiones: { label: 'Planes de pensiones' },
     inmobiliario: { label: 'Inmobiliario' },
+    prestamo: { label: 'Préstamos concedidos' },
     deuda: { label: 'Deudas' },
   };
-  const LIST_ORDER = ['efectivo', 'fondo', 'accion', 'plan_pensiones', 'inmobiliario'];
-  const STACK_ORDER = ['inmobiliario', 'plan_pensiones', 'fondo', 'accion', 'efectivo']; // de abajo arriba
-  const STALE_DAYS = { fondo: 10, accion: 7, plan_pensiones: 21, efectivo: 40, deuda: 40, inmobiliario: 400 };
+  const LIST_ORDER = ['efectivo', 'fondo', 'accion', 'plan_pensiones', 'inmobiliario', 'prestamo'];
+  const STACK_ORDER = ['inmobiliario', 'prestamo', 'plan_pensiones', 'fondo', 'accion', 'efectivo']; // de abajo arriba
+  const STALE_DAYS = { fondo: 10, accion: 7, plan_pensiones: 21, efectivo: 40, deuda: 40, inmobiliario: 400, prestamo: 40 };
 
   // ---------- fechas ('YYYY-MM-DD') ----------
   const toTs = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); };
