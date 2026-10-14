@@ -3,7 +3,7 @@
 Web personal para seguir tu patrimonio (cuentas, fondos, acciones, planes de pensiones, inmobiliario y deudas).
 
 - **Web**: HTML estático en GitHub Pages. Entras con un enlace que te llega al email.
-- **Datos**: Supabase (Postgres). Se sincronizan entre ordenador y móvil. Cada fila solo la ve tu usuario (RLS).
+- **Datos**: Supabase (Postgres). Se sincronizan entre ordenador y móvil. La web no guarda nada en el navegador salvo la sesión de login: tus ajustes (objetivo, ocultar importes, avisos leídos) están en la tabla `user_settings`. Cada fila solo la ve tu usuario (RLS).
 - **Precios**: un flujo de GitHub Actions corre cada día, consulta los precios y los guarda. Valor = participaciones × precio.
 - **Cuentas, inmobiliario y deudas**: los actualizas tú a mano desde la pestaña *Actualizar*.
 
@@ -85,6 +85,25 @@ Desde entonces corre solo cada día (~07:17 UTC). Detalles útiles:
 2. Si compras o vendes participaciones: abre el producto → *Cambiar participaciones*. El histórico se conserva.
 3. **Ajustes → Descargar copia** guarda un JSON de seguridad (no lo subas a GitHub).
 
+## Préstamos con amortización automática
+
+En **Ajustes → editar la deuda** (tipo *Deuda*) puedes indicar cuota mensual, tipo de interés anual y día de cobro. Anota una vez el capital pendiente que te dé el banco (en *Actualizar*) y el flujo diario de GitHub calcula cada mes el capital pendiente (cuota fija, amortización francesa) y lo guarda. Cuando anotes un dato nuevo del banco, el cálculo continúa desde él. Si el préstamo es de interés variable, corrige tipo y cuota al revisarse. Requiere haber ejecutado la migración de Supabase (columnas `loan` y `auto`).
+
+## Aportaciones mensuales automáticas
+
+En **Ajustes → editar el producto** (fondo, plan o acción) indica importe y día del mes. El flujo diario suma cada mes `importe ÷ precio de ese día` a las participaciones, desde la última fecha de participaciones registrada. Si cambias las participaciones a mano, continúa desde ahí. Si el precio de ese día aún no existe, espera al siguiente día. Requiere la columna `plan` (`alter table public.assets add column if not exists plan jsonb;`).
+
+## Qué hay en cada pestaña
+
+- **Resumen**: patrimonio neto, activos, deudas, líquido y beneficio de inversiones; evolución por periodos (con opción «sin inmuebles»), reparto por tipo o entidad, objetivo con fecha estimada, próximos movimientos, concentración, movimientos a 30 días mes a mes y mapa de meses (cuadrícula año × mes en € o %). El botón «Ocultar importes» difumina las cifras para enseñar la pantalla.
+- **Inversiones**: valor frente a lo aportado, beneficio, rentabilidad y rentabilidad anualizada por producto (ordenable y con un filtro por entidad o nombre que resume lo que ves; la anualizada tiene en cuenta cuándo aportaste y no se calcula con menos de 6 meses).
+- **Comparar**: elige dos fechas (o un atajo 1M, 3M, 6M, Año, 1A, Todo) y ves qué producto ha subido o bajado, el cambio por tipo y cuánto del cambio en inversiones es mercado y cuánto aportación tuya.
+- **Cuentas**: cuentas, inmuebles y deudas con su última actualización.
+- **Futuro**: proyección ilustrativa con tus aportaciones y cuotas, hipotecas (fin estimado e intereses restantes) y calendario.
+- **Actualizar** y **Ajustes**: como antes; en Ajustes también se descarga la evolución en CSV.
+
+El objetivo y «ocultar importes» se guardan solo en el navegador de cada dispositivo.
+
 ## 9. Añadir el plan de Indexa más adelante
 
 Necesito el código exacto del plan (N5138 es el código DGS; confirma el nombre/ISIN del fondo en el documento de Indexa, el plan de autónomos puede ser un producto distinto al de otros planes). Se añade en **Ajustes → Añadir producto** con 715,72 participaciones, categoría *Plan de pensiones* y fuente `quefondos` con ese código; o escríbeme el código y lo preparo.
@@ -92,7 +111,7 @@ Necesito el código exacto del plan (N5138 es el código DGS; confirma el nombre
 ## Estructura
 
 ```
-index.html, style.css, app.js, calc.js, charts.js, config.js   web
+index.html, style.css, app.js, calc.js, charts.js, analytics.js, config.js   web
 supabase/schema.sql                                            tablas + seguridad
 scripts/update_prices.py                                       actualizador de precios
 .github/workflows/update-prices.yml                            flujo diario
