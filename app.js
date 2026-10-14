@@ -20,7 +20,7 @@
   const pctPlain = new Intl.NumberFormat('es-ES', { style: 'percent', maximumFractionDigits: 0 });
   const TABS = [['resumen', 'Resumen'], ['inversiones', 'Inversiones'], ['cuentas', 'Cuentas'], ['comparar', 'Comparar'], ['futuro', 'Futuro'], ['actualizar', 'Actualizar'], ['ajustes', 'Ajustes']];
   const CAT_OPTIONS = [['efectivo', 'Efectivo (cuenta bancaria)'], ['fondo', 'Fondo de inversión'], ['accion', 'Acción'],
-    ['plan_pensiones', 'Plan de pensiones'], ['inmobiliario', 'Inmobiliario'], ['deuda', 'Deuda (hipoteca, préstamo)']];
+    ['plan_pensiones', 'Plan de pensiones'], ['inmobiliario', 'Inmobiliario'], ['prestamo', 'Préstamo concedido (te deben)'], ['deuda', 'Deuda (hipoteca, préstamo)']];
   const UNIT_CATS = ['fondo', 'accion', 'plan_pensiones'];
   const SOURCE_TYPES = ['yahoo', 'ft', 'quefondos', 'finect', 'url_regex'];
 
@@ -335,7 +335,7 @@
 
     const up = A.upcoming(m, today, 45);
     const upHtml = up.length ? html`${up.slice(0, 7).map((e) => html`<div class="event"><div class="d"><b>${Number(e.date.slice(8))}</b><span>${MES[Number(e.date.slice(5, 7)) - 1]}</span></div>
-        <div class="t">${e.label}<small>${e.kind === 'cuota' ? 'Cuota de la deuda (tu parte)' : 'Aportación automática'}</small></div><div class="a num">${e.kind === 'cuota' ? '−' : ''}${Calc.fmtEUR(e.amount, 2)}</div></div>`)}`
+        <div class="t">${e.label}<small>${evLabel(e.kind)}</small></div><div class="a num">${e.kind === 'cuota' ? '−' : e.kind === 'cobro' ? '+' : ''}${Calc.fmtEUR(e.amount, 2)}</div></div>`)}`
       : html`<p class="empty-line muted" style="padding:6px 18px 16px">Sin cuotas ni aportaciones previstas en los próximos 45 días. Configúralas en Ajustes (aportación mensual o amortización).</p>`;
 
     const mv = A.movers(m, 30);
@@ -627,7 +627,7 @@
   // ---------- cuentas e inmuebles ----------
   function renderCuentas() {
     const m = state.model, today = Calc.todayStr();
-    const order = ['efectivo', 'inmobiliario', 'deuda'];
+    const order = ['efectivo', 'inmobiliario', 'prestamo', 'deuda'];
     const list = m.assets.filter((a) => a.active && a.valuation === 'manual');
     if (!list.length) return emptyState('No hay cuentas ni inmuebles', 'Añade tus cuentas bancarias, inmuebles y deudas en Ajustes.', [['ajustes', 'Ir a Ajustes']]);
     return html`<div class="view-title"><div><h2 style="font-size:19px">Cuentas, inmuebles y deudas</h2><p class="muted small">Estos valores los anotas tú (o se calculan solos si la deuda tiene cuota). La pestaña Actualizar te deja ponerlos todos de una vez.</p></div>
@@ -652,12 +652,19 @@
       })}`;
   }
 
+  const loanCard = (l, lend) => html`<div class="loan-card"><div class="loan-top"><b>${l.asset.name}${l.share < 1 ? ' (' + Math.round(l.share * 100) + ' %)' : ''}</b><b class="num">${lend ? '' : '−'}${Calc.fmtEUR(l.balance * l.share)}</b></div>
+            <div class="loan-facts"><div><div class="l">${lend ? 'Cobras al mes' : 'Cuota mensual'}</div><div class="v num">${Calc.fmtEUR(l.payment * l.share, 2)}</div></div>
+            <div><div class="l">Tipo de interés</div><div class="v num">${String(l.rate).replace('.', ',')} %</div></div>
+            <div><div class="l">${l.never ? 'Estado' : lend ? 'Terminarás de cobrar' : 'Terminarás de pagar'}</div><div class="v">${l.never ? 'La cuota no cubre los intereses' : Calc.fmtDate(l.payoff).replace(/^\d+ /, '')}</div></div>
+            <div><div class="l">${l.never ? '' : lend ? 'Intereses que cobrarás' : 'Intereses que te quedan'}</div><div class="v num">${l.never ? '' : Calc.fmtEUR(l.interestLeft * l.share)}</div></div></div>
+            ${l.months ? html`<p class="small muted" style="margin:8px 0 0">${l.months} cuotas restantes (${Math.floor(l.months / 12)} años y ${l.months % 12} meses).</p>` : ''}</div>`;
+  const evLabel = (k) => (k === 'cuota' ? 'Cuota de la deuda (tu parte)' : k === 'cobro' ? 'Cobro del préstamo (tu parte)' : 'Aportación automática');
   // ---------- futuro: proyección, deudas y calendario ----------
   const HORIZONS = [[1, '1 año'], [3, '3 años'], [5, '5 años'], [10, '10 años'], [20, '20 años']];
   function renderFuturo() {
     const m = state.model, today = Calc.todayStr();
     if (!m.dates.length) return emptyState('Todavía no hay datos', 'La proyección necesita al menos tus saldos y precios actuales.', [['actualizar', 'Ir a Actualizar']]);
-    const loans = A.loans(m, today), contrib = A.monthlyContributions(m), up = A.upcoming(m, today, 60);
+    const loans = A.loans(m, today), lent = A.lent(m, today), contrib = A.monthlyContributions(m), up = A.upcoming(m, today, 60);
     const pr = state.proj;
     return html`
       <div class="grid-main">
@@ -673,16 +680,12 @@
       </div>
       <div class="grid-half">
         <section class="panel"><div class="panel-head"><div><h2>Deudas y préstamos</h2><div class="sub">Con cuota configurada (tu parte)</div></div></div>
-          ${loans.length ? loans.map((l) => html`<div class="loan-card"><div class="loan-top"><b>${l.asset.name}${l.share < 1 ? ' (' + Math.round(l.share * 100) + ' %)' : ''}</b><b class="num">−${Calc.fmtEUR(l.balance * l.share)}</b></div>
-            <div class="loan-facts"><div><div class="l">Cuota mensual</div><div class="v num">${Calc.fmtEUR(l.payment * l.share, 2)}</div></div>
-            <div><div class="l">Tipo de interés</div><div class="v num">${String(l.rate).replace('.', ',')} %</div></div>
-            <div><div class="l">${l.never ? 'Estado' : 'Terminarás de pagar'}</div><div class="v">${l.never ? 'La cuota no cubre los intereses' : Calc.fmtDate(l.payoff).replace(/^\d+ /, '')}</div></div>
-            <div><div class="l">${l.never ? '' : 'Intereses que te quedan'}</div><div class="v num">${l.never ? '' : Calc.fmtEUR(l.interestLeft * l.share)}</div></div></div>
-            ${l.months ? html`<p class="small muted" style="margin:8px 0 0">${l.months} cuotas restantes (${Math.floor(l.months / 12)} años y ${l.months % 12} meses).</p>` : ''}</div>`)
-            : html`<p class="muted" style="padding:6px 18px 16px">Aún no hay deudas con cuota. En Ajustes, edita la deuda y rellena cuota, tipo y día de cobro.</p>`}</section>
+          ${loans.length ? loans.map((l) => loanCard(l, false))
+            : html`<p class="muted" style="padding:6px 18px 16px">Aún no hay deudas con cuota. En Ajustes, edita la deuda y rellena cuota, tipo y día de cobro.</p>`}
+          ${lent.length ? html`<div class="panel-head" style="padding-top:6px"><div><h3 style="margin:0;font-size:15px">Préstamos que te deben</h3></div></div>${lent.map((l) => loanCard(l, true))}` : ''}</section>
         <section class="panel"><div class="panel-head"><div><h2>Calendario</h2><div class="sub">Próximos 60 días</div></div></div>
           ${up.length ? up.slice(0, 12).map((e) => html`<div class="event"><div class="d"><b>${Number(e.date.slice(8))}</b><span>${MES[Number(e.date.slice(5, 7)) - 1]}</span></div>
-            <div class="t">${e.label}<small>${e.kind === 'cuota' ? 'Cuota de la deuda (tu parte)' : 'Aportación automática'}</small></div><div class="a num">${e.kind === 'cuota' ? '−' : ''}${Calc.fmtEUR(e.amount, 2)}</div></div>`)
+            <div class="t">${e.label}<small>${evLabel(e.kind)}</small></div><div class="a num">${e.kind === 'cuota' ? '−' : e.kind === 'cobro' ? '+' : ''}${Calc.fmtEUR(e.amount, 2)}</div></div>`)
             : html`<p class="muted" style="padding:6px 18px 16px">Nada previsto. Configura aportaciones o cuotas en Ajustes.</p>`}</section>
       </div>`;
   }
@@ -863,7 +866,7 @@
             <div><label for="ea-pa">Importe mensual (€)</label><input id="ea-pa" name="plan_amount" inputmode="decimal" data-amount="2" value="${a && a.plan && a.plan.amount != null ? Calc.fmtNum(Number(a.plan.amount), 2) : ''}"></div>
             <div><label for="ea-pd">Día del mes</label><input id="ea-pd" name="plan_day" inputmode="numeric" value="${a && a.plan && a.plan.day ? a.plan.day : ''}"></div></div>
         </div>
-        <div data-loan-only${cat === 'deuda' ? '' : raw(' hidden')}>
+        <div data-loan-only${cat === 'deuda' || cat === 'prestamo' ? '' : raw(' hidden')}>
           <h4>Amortización automática (opcional)</h4>
           <p class="field-hint">Si pagas una cuota fija cada mes, la web calcula sola cómo baja el capital pendiente, sin que lo anotes a mano. Anota una vez el capital pendiente que te da el banco (en Actualizar) y rellena esto. Cuando el banco te dé un dato nuevo, anótalo y se recalcula desde ahí. Déjalo vacío si no quieres automatizarla.</p>
           <div class="grid2">
@@ -907,7 +910,7 @@
     const pct = num(fd.get('share') || '100');
     if (pct == null || !(pct > 0 && pct <= 100)) return toast('Tu parte debe estar entre 1 y 100 %.', true);
     let loan = null;
-    if (category === 'deuda' && ((fd.get('loan_payment') || '').trim() || (fd.get('loan_day') || '').trim())) {
+    if ((category === 'deuda' || category === 'prestamo') && ((fd.get('loan_payment') || '').trim() || (fd.get('loan_day') || '').trim())) {
       const payment = num(fd.get('loan_payment')), rate = num(fd.get('loan_rate') || '0'), day = parseInt(fd.get('loan_day'), 10);
       if (payment == null || !(payment > 0)) return toast('Escribe la cuota mensual del préstamo.', true);
       if (rate == null || rate < 0 || rate > 30) return toast('El tipo de interés debe estar entre 0 y 30 %.', true);
@@ -1163,7 +1166,7 @@
       const isUnits = UNIT_CATS.includes(t.value), f = t.closest('form');
       f.querySelectorAll('[data-units-only]').forEach((x) => { x.hidden = !isUnits; });
       f.querySelectorAll('[data-manual-only]').forEach((x) => { x.hidden = isUnits; });
-      f.querySelectorAll('[data-loan-only]').forEach((x) => { x.hidden = t.value !== 'deuda'; });
+      f.querySelectorAll('[data-loan-only]').forEach((x) => { x.hidden = t.value !== 'deuda' && t.value !== 'prestamo'; });
     }
   });
 
