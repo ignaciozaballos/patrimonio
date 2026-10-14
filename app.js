@@ -24,14 +24,28 @@
   const UNIT_CATS = ['fondo', 'accion', 'plan_pensiones'];
   const SOURCE_TYPES = ['yahoo', 'ft', 'quefondos', 'finect', 'url_regex'];
 
+  // Ajustes de la persona (objetivo, ocultar importes, leídos…): viven en Supabase (tabla user_settings),
+  // no en el navegador. Aquí solo hay una copia en memoria mientras la página está abierta.
+  const settings = {};
+  let saveChain = Promise.resolve();
   const store = {
-    get(k) { try { return localStorage.getItem('patrimonio.' + k); } catch (e) { return null; } },
-    set(k, v) { try { if (v == null) localStorage.removeItem('patrimonio.' + k); else localStorage.setItem('patrimonio.' + k, String(v)); } catch (e) { /* sin almacenamiento */ } },
+    get(k) { return Object.prototype.hasOwnProperty.call(settings, k) ? settings[k] : null; },
+    set(k, v) {
+      if (v == null) delete settings[k]; else settings[k] = v;
+      if (!state.sb || !state.user) return;
+      const uid = state.user.id;
+      saveChain = saveChain.then(async () => {
+        const q = state.sb.from('user_settings');
+        const r = v == null ? await q.delete().eq('user_id', uid).eq('key', k)
+                            : await q.upsert({ user_id: uid, key: k, value: v, updated_at: new Date().toISOString() }, { onConflict: 'user_id,key' });
+        if (r.error) throw r.error;
+      }).catch((e) => { handleError(e); });
+    },
   };
   const state = { sb: null, user: null, data: null, model: null, tab: 'resumen', rng: { main: { k: '1a' }, month: { k: '1a' }, inv: { k: '1a' } }, revealed: false, dlg: null,
-    hide: store.get('hide') === '1', hiddenCats: new Set(), notesOpen: store.get('notes') !== '0', donut: 'cat', invSort: { key: 'value', dir: -1 },
-    goal: Number(store.get('goal')) > 0 ? Number(store.get('goal')) : null, proj: { years: 10, ret: 5, re: 2 },
-    heat: store.get('heat') === 'pct' ? 'pct' : 'eur', cmp: null, invFilter: '', notesView: 'pend' };
+    hide: false, hiddenCats: new Set(), notesOpen: true, donut: 'cat', invSort: { key: 'value', dir: -1 },
+    goal: null, proj: { years: 10, ret: 5, re: 2 },
+    heat: 'eur', cmp: null, invFilter: '', notesView: 'pend' };
 
   // ---------- avisos ----------
   let toastTimer;
@@ -60,16 +74,17 @@
   const must = ({ data, error }) => { if (error) throw error; return data; };
 
 
-  // ---------- avisos leídos (guardado en este navegador, por usuario) ----------
-  const readKey = () => 'read.' + (state.user ? state.user.id : '');
+  // ---------- avisos leídos (se guardan en Supabase, por usuario) ----------
   function readSet() {
-    try { return new Set(JSON.parse(store.get(readKey()) || '[]')); } catch (e) { return new Set(); }
+    const v = store.get('read');
+    return new Set(Array.isArray(v) ? v : []);
   }
   function setRead(key, on, active) {
     const r = readSet();
     if (on) r.add(key); else r.delete(key);
     const keep = new Set(active); // los avisos resueltos se olvidan: si vuelven, vuelven como pendientes
-    store.set(readKey(), JSON.stringify([...r].filter((k) => keep.has(k))));
+    const list = [...r].filter((k) => keep.has(k));
+    store.set('read', list.length ? list : null);
   }
   function notesPanel(notes) {
     if (!notes.length) return html``;
@@ -96,7 +111,7 @@
       return;
     }
     state.sb = window.supabase.createClient(url, key);
-    state.sb.auth.onAuthStateChange((event) => { if (event === 'SIGNED_OUT') { state.user = null; showLogin(); } });
+    state.sb.auth.onAuthStateChange((event) => { if (event === 'SIGNED_OUT') { state.user = null; clearSettings(); showLogin(); } });
     const { data } = await state.sb.auth.getSession();
     if (data && data.session) { state.user = data.session.user; await enterApp(); } else showLogin();
   }
@@ -171,7 +186,39 @@
     if (state.dlg && dlg.open) reopenDialog();
   }
 
+
+  function applySettings() {
+    state.hide = store.get('hide') === true;
+    state.notesOpen = store.get('notes') !== false;
+    const g = Number(store.get('goal'));
+    state.goal = g > 0 ? g : null;
+    state.heat = store.get('heat') === 'pct' ? 'pct' : 'eur';
+  }
+  function clearSettings() { for (const k of Object.keys(settings)) delete settings[k]; applySettings(); }
+  async function loadSettings() {
+    clearSettings();
+    const { data, error } = await state.sb.from('user_settings').select('key,value');
+    if (error) { toast('No se pueden leer tus ajustes. ¿Has ejecutado ajustes_en_supabase.sql?', true); return; }
+    for (const r of data || []) settings[r.key] = r.value;
+    // Una sola vez: pasa a Supabase lo que versiones anteriores dejaron en este navegador y lo borra de aquí.
+    try {
+      const legacy = { hide: (v) => v === '1' ? true : null, notes: (v) => v === '0' ? false : null,
+        goal: (v) => Number(v) > 0 ? Number(v) : null, heat: (v) => v === 'pct' ? 'pct' : null,
+        read: (v) => { try { const a = JSON.parse(v); return Array.isArray(a) && a.length ? a : null; } catch (e) { return null; } } };
+      for (const [k, conv] of Object.entries(legacy)) {
+        const lk = 'patrimonio.' + (k === 'read' ? 'read.' + state.user.id : k);
+        const raw = localStorage.getItem(lk);
+        if (raw == null) continue;
+        const v = conv(raw);
+        if (v != null && store.get(k) == null) store.set(k, v);
+        localStorage.removeItem(lk);
+      }
+    } catch (e) { /* sin almacenamiento: nada que migrar */ }
+    applySettings();
+  }
+
   async function enterApp() {
+    await loadSettings();
     document.body.classList.toggle('hide-amounts', state.hide);
     app.innerHTML = html`
       <div class="brand-strip"><div class="inner"><span>Panel personal</span>
@@ -905,7 +952,7 @@
       renderView();
     },
     privacy: (t) => {
-      state.hide = !state.hide; store.set('hide', state.hide ? '1' : null);
+      state.hide = !state.hide; store.set('hide', state.hide ? true : null);
       document.body.classList.toggle('hide-amounts', state.hide); t.setAttribute('aria-pressed', String(state.hide));
     },
     'heat-mode': (t) => { state.heat = t.dataset.mode === 'pct' ? 'pct' : 'eur'; store.set('heat', state.heat); renderView(); },
@@ -1065,7 +1112,7 @@
     Promise.resolve(forms[f.dataset.form](f, btn)).catch(handleError);
   });
   document.addEventListener('toggle', (e) => {
-    if (e.target && e.target.id === 'notes-panel') { state.notesOpen = e.target.open; store.set('notes', e.target.open ? '1' : '0'); }
+    if (e.target && e.target.id === 'notes-panel') { state.notesOpen = e.target.open; store.set('notes', e.target.open); }
   }, true);
   document.addEventListener('input', (e) => {
     const t = e.target;
