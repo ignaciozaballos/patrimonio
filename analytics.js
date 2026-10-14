@@ -170,7 +170,7 @@
       if (UNIT_CATS.includes(a.category)) for (const f of flows(a, model.idx)) if (f.date > from && f.date <= to) contributed += f.amount;
       rows.push({ asset: a, a: sa, b: sb, delta: sb - sa, pct: Math.abs(sa) > 0.5 ? (sb - sa) / Math.abs(sa) : null, isNew: Math.abs(sa) < 0.005, gone: Math.abs(sb) < 0.005, contributed });
     }
-    const cats = ['efectivo', 'fondo', 'accion', 'plan_pensiones', 'inmobiliario', 'deuda'].map((c) => {
+    const cats = ['efectivo', 'fondo', 'accion', 'plan_pensiones', 'inmobiliario', 'prestamo', 'deuda'].map((c) => {
       const rs = rows.filter((r) => r.asset.category === c);
       const a = rs.reduce((s, r) => s + r.a, 0), b = rs.reduce((s, r) => s + r.b, 0);
       return { cat: c, rows: rs, a, b, delta: b - a, pct: Math.abs(a) > 0.5 ? (b - a) / Math.abs(a) : null };
@@ -216,6 +216,8 @@
       interestLeft: interest, next: first };
   }
   function loans(model, today) { return active(model).filter((a) => a.category === 'deuda').map((a) => loanInfo(a, model, today)).filter(Boolean); }
+  /** Préstamos que te deben (categoría «prestamo») con cuota configurada. */
+  function lent(model, today) { return active(model).filter((a) => a.category === 'prestamo').map((a) => loanInfo(a, model, today)).filter(Boolean); }
 
   function upcoming(model, today, days) {
     const end = Calc.addDays(today, days || 45), out = [];
@@ -227,7 +229,7 @@
       }
       if (a.loan && Number(a.loan.payment) > 0) {
         const day = parseInt(a.loan.day, 10);
-        for (let d = nextOccurrence(day, today); d <= end; d = nextOccurrence(day, Calc.addDays(d, 1))) out.push({ date: d, kind: 'cuota', label: a.name, amount: Number(a.loan.payment) * sh });
+        for (let d = nextOccurrence(day, today); d <= end; d = nextOccurrence(day, Calc.addDays(d, 1))) out.push({ date: d, kind: a.category === 'prestamo' ? 'cobro' : 'cuota', label: a.name, amount: Number(a.loan.payment) * sh });
       }
     }
     return out.sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
@@ -246,17 +248,21 @@
     const contrib = monthlyContributions(model);
     const ln = loans(model, today).map((l) => ({ bal: l.balance, rate: l.rate, payment: l.payment, share: l.share }));
     const loanIds = new Set(loans(model, today).map((l) => l.asset.id));
+    // préstamos concedidos: cada cuota cobrada baja el capital pendiente y sube el efectivo (el neto no cambia, salvo intereses)
+    const lt = lent(model, today).map((l) => ({ bal: l.balance, rate: l.rate, payment: l.payment, share: l.share }));
+    const lentOther = cur('prestamo') - lt.reduce((s, l) => s + l.bal * l.share, 0);
     let otherDebt = 0;
     for (const a of active(model)) if (a.category === 'deuda' && !loanIds.has(a.id)) { const i = Calc.latestInfo(a, model.idx, today); otherDebt += i.value || 0; }
     const dates = [today], net = [], inv = [], debt = [];
     const push = () => {
       const d = ln.reduce((s, l) => s + l.bal * l.share, 0) + otherDebt;
-      net.push(cash + invest + re - d); inv.push(invest); debt.push(d);
+      net.push(cash + invest + re + lentOther + lt.reduce((s, l) => s + l.bal * l.share, 0) - d); inv.push(invest); debt.push(d);
     };
     push();
     for (let k = 1; k <= months; k++) {
       invest = invest * (1 + r) + contrib; re *= 1 + g;
       for (const l of ln) if (l.bal > 0.005) { const i = l.bal * l.rate / 1200; l.bal = Math.max(0, l.bal - Math.max(0, Math.min(l.bal, l.payment - i))); }
+      for (const l of lt) if (l.bal > 0.005) { const i = l.bal * l.rate / 1200, pay = Math.min(l.bal + i, l.payment); cash += pay * l.share; l.bal = Math.max(0, l.bal - Math.max(0, pay - i)); }
       dates.push(addMonths(today, k)); push();
     }
     return { dates, net, invest: inv, debt, contrib };
@@ -304,12 +310,12 @@
   }
 
   function evolutionCSV(model) {
-    const cats = ['efectivo', 'fondo', 'accion', 'plan_pensiones', 'inmobiliario', 'deuda'];
+    const cats = ['efectivo', 'fondo', 'accion', 'plan_pensiones', 'inmobiliario', 'prestamo', 'deuda'];
     const head = ['fecha', ...cats, 'activos', 'patrimonio_neto'];
     const rows = model.dates.map((d, i) => [d, ...cats.map((c) => model.byCat[c][i].toFixed(2)), model.gross[i].toFixed(2), model.net[i].toFixed(2)].join(';'));
     return [head.join(';'), ...rows].join('\n');
   }
 
   return { UNIT_CATS, INVEST_CATS, LIQUID_CATS, addMonths, nextOccurrence, flows, returns, xirr, MIN_ANNUAL_DAYS, heatmap, compare, investedSeries, investValueSeries, monthly, periodStats, ytd,
-    loanInfo, loans, upcoming, monthlyContributions, project, positions, byEntity, concentration, movers, goalETA, evolutionCSV };
+    loanInfo, loans, lent, upcoming, monthlyContributions, project, positions, byEntity, concentration, movers, goalETA, evolutionCSV };
 });
