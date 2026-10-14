@@ -29,6 +29,7 @@
   --c-accion: #f59e0b;
   --c-plan_pensiones: #8b5cf6;
   --c-inmobiliario: #94a3b8;
+  --c-prestamo: #db2777;
   --c-deuda: #e5484d;
 
   --radius-sm: 8px;
@@ -68,6 +69,7 @@
     --c-accion: #fbbf24;
     --c-plan_pensiones: #a78bfa;
     --c-inmobiliario: #6b7fa6;
+    --c-prestamo: #f472b6;
     --c-deuda: #ff6b72;
   }
 }
