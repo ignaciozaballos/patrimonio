@@ -5,7 +5,7 @@
 -- ============================================================
 
 -- 1) PRODUCTOS --------------------------------------------------
---  category : efectivo | fondo | accion | plan_pensiones | inmobiliario | deuda
+--  category : efectivo | fondo | accion | plan_pensiones | inmobiliario | prestamo | deuda
 --  valuation: 'units'  -> valor = participaciones x precio (fondos, acciones, planes)
 --             'manual' -> valor que escribes tú cada mes (cuentas, inmuebles, deudas)
 --  sources  : lista (JSON) de dónde sacar el precio, en orden de preferencia.
@@ -16,12 +16,15 @@ create table if not exists public.assets (
   name        text not null,
   entity      text,                       -- banco / gestora / broker (solo informativo)
   category    text not null check (category in
-                ('efectivo','fondo','accion','plan_pensiones','inmobiliario','deuda')),
+                ('efectivo','fondo','accion','plan_pensiones','inmobiliario','prestamo','deuda')),
   valuation   text not null check (valuation in ('units','manual')),
   isin        text,                       -- ISIN o código DGS (solo informativo)
   sources     jsonb not null default '[]'::jsonb,
   active      boolean not null default true,
   sort        int not null default 0,
+  share       numeric not null default 1 check (share > 0 and share <= 1),
+  plan        jsonb,                      -- aportación periódica: {"amount":importe €, "day":día del mes}
+  loan        jsonb,                      -- préstamos: {"payment":cuota, "rate":tipo anual %, "day":día de cobro}
   created_at  timestamptz not null default now()
 );
 
@@ -56,6 +59,7 @@ create table if not exists public.manual_values (
   asset_id  uuid not null references public.assets(id) on delete cascade,
   date      date not null,
   value     numeric not null,
+  auto      boolean not null default false,   -- true = calculado por el flujo (amortización de préstamos)
   unique (asset_id, date)
 );
 
@@ -66,6 +70,13 @@ create index if not exists manual_asset_date_idx on public.manual_values (asset_
 -- 5) SEGURIDAD (Row Level Security) -----------------------------
 --  Cada fila solo la ve y la toca su dueño. Sin sesión iniciada no se ve nada.
 --  El flujo de GitHub usa la clave secreta, que se salta estas reglas a propósito.
+-- Para bases creadas antes de existir 'share' (parte propia del producto: 0,5 = 50 %)
+alter table public.assets add column if not exists share numeric not null default 1 check (share > 0 and share <= 1);
+
+alter table public.assets add column if not exists loan jsonb;
+alter table public.assets add column if not exists plan jsonb;
+alter table public.manual_values add column if not exists auto boolean not null default false;
+
 alter table public.assets        enable row level security;
 alter table public.holdings      enable row level security;
 alter table public.prices        enable row level security;
@@ -100,3 +111,24 @@ create policy own_manual on public.manual_values
 
 -- La clave pública (anon/publishable) no debe poder leer nada de estas tablas:
 revoke all on public.assets, public.holdings, public.prices, public.manual_values from anon;
+
+-- 6) AJUSTES PERSONALES ------------------------------------------
+-- Ajustes de cada persona (objetivo de patrimonio, ocultar importes, avisos leídos, etc.).
+-- Una fila por ajuste. Cada usuario solo ve y toca los suyos. Se puede repetir sin problema.
+create table if not exists public.user_settings (
+  user_id    uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  key        text not null,
+  value      jsonb not null,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, key)
+);
+
+alter table public.user_settings enable row level security;
+
+drop policy if exists own_settings on public.user_settings;
+create policy own_settings on public.user_settings
+  for all to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+revoke all on public.user_settings from anon;
